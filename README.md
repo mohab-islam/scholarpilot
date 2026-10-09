@@ -117,6 +117,28 @@ All settings are environment variables (see [`.env.example`](.env.example)).
 
 FastAPI + SQLite on the backend, a framework-free JavaScript frontend with generated SVG artwork, and an MV3 Chrome extension. AI agents are focused Gemini prompts, many of them grounded with Google Search and run in parallel. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the module map, data model and the key flows.
 
+```mermaid
+flowchart TB
+    subgraph Browser
+        UI["Frontend (vanilla JS)<br/>dashboard · workspace · writer"]
+        EXT["Chrome extension<br/>scroll, de-duplicate, send saved posts"]
+    end
+    subgraph Server["FastAPI app (single process)"]
+        AUTH["auth<br/>login · extension token"]
+        CORE["main<br/>profile · scholarships · ingest · letters"]
+        PIPE["pipeline<br/>playbook · templates · sweep · applications · professors"]
+        INBOX["inbox<br/>Gmail · to-dos · status sync · watcher"]
+        AGENTS["agents + ai<br/>parallel research agents"]
+        DB[("SQLite")]
+    end
+    UI -- "REST /api" --> AUTH --> CORE & PIPE & INBOX
+    EXT -- "token + posts" --> AUTH
+    CORE & PIPE & INBOX --> DB
+    CORE & PIPE & INBOX --> AGENTS
+    AGENTS -- "Gemini + Google Search grounding" --> VERTEX[("Vertex AI")]
+    INBOX -- "OAuth" --> GMAIL[("Gmail API")]
+```
+
 ```
 backend/      FastAPI app (main · pipeline · inbox · agents · ai · auth · db) and demo.py
 frontend/     index.html · dash.js · extra.js · theme.css
