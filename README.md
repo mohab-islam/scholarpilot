@@ -59,6 +59,28 @@ gcloud auth application-default login
 
 The first screen asks for your country, the degree you want and your major. Nothing else works until your profile is set, because every search is filtered by it.
 
+### Turn on the AI features (once)
+
+The app runs without them, but search, link reading, research and letter writing need Gemini on Vertex AI in a Google Cloud project **with billing enabled**:
+
+```bash
+gcloud auth login
+gcloud config set project YOUR_PROJECT_ID
+gcloud services enable aiplatform.googleapis.com
+gcloud auth application-default login        # lets the app use your credentials locally
+```
+
+Then put `GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID` in `.env` and restart. Until it is set, AI actions return a clear "Set GOOGLE_CLOUD_PROJECT" message.
+
+### Connect Gmail locally (optional)
+
+1. `gcloud services enable gmail.googleapis.com`
+2. Console → *Google Auth Platform*: configure the consent screen (External, add your own address as a **test user**) and add the scopes `gmail.readonly` and `gmail.compose`.
+3. *Clients* → create an OAuth client of type **Desktop app** and download the JSON.
+4. In the app open **Inbox & Gmail**, upload the JSON, press **Connect Gmail**, and approve in the browser tab that opens.
+
+While the consent screen is in *testing* mode Google expires the token after 7 days, so either publish the app (fine for personal use) or reconnect weekly. To have the app check your mail on a timer while it runs, set `WATCH_INTERVAL_MIN=20` in `.env`. For an always-on setup see the deployment guide below.
+
 **Just looking around?** Run the demo with sample data and no Google account:
 
 ```bash
