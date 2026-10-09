@@ -1,0 +1,30 @@
+# Production stack: the app behind Caddy (automatic HTTPS). Used on the VM with:
+#   docker compose -f docker-compose.prod.yml up -d --build
+# Requires a .env file next to it (see .env.example) with DOMAIN, PUBLIC_URL, ALLOWED_HOSTS, APP_PASSWORD, ...
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SP_DATA_DIR: /data
+    volumes:
+      - ./data:/data        # chown 1000:1000 ./data on the host
+    expose:
+      - "8000"
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+volumes:
+  caddy_data:
+  caddy_config:

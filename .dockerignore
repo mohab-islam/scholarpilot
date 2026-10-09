@@ -1,0 +1,14 @@
+.venv
+data
+deploy
+docs
+tests
+extension
+.github
+SETUP.md
+README.md
+__pycache__
+*.pyc
+.env
+.git
+.pytest_cache

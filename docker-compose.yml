@@ -1,0 +1,18 @@
+# Local stack: just the app on http://127.0.0.1:8000 (data kept in a named volume).
+# AI features need Google credentials inside the container; the simplest route is running natively
+# (start.sh / start.bat) after `gcloud auth application-default login`. See README.
+# For a public, HTTPS-protected deployment use docker-compose.prod.yml.
+services:
+  app:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      SP_DATA_DIR: /data
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - scholarpilot-data:/data
+volumes:
+  scholarpilot-data:

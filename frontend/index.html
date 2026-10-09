@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ScholarPilot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/theme.css">
+</head>
+<body>
+<div class="ambient"><i></i><i></i><i></i></div>
+<nav class="dock" id="nav"></nav>
+<div class="stage">
+  <div class="topbar">
+    <label class="search" style="margin:0"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="gs" placeholder="Search scholarships"></label>
+    <div class="tabs" id="tabs"></div>
+    <button class="ico-btn" id="bell" title="Deadlines"><svg class="i" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg></button>
+    <div class="me" id="me"></div>
+  </div>
+  <main id="main"></main>
+</div>
+<div id="toast"></div>
+
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const api = async (path, opts = {}) => {
+  if (opts.body && !(opts.body instanceof FormData)) { opts.body = JSON.stringify(opts.body); opts.headers = {'Content-Type': 'application/json'}; }
+  const r = await fetch('/api' + path, opts);
+  if (r.status === 401) { location.href = '/login'; throw new Error('Signing in…'); }
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.json();
+};
+function toast(m) { const t = $('#toast'); t.textContent = m; t.style.display = 'block'; clearTimeout(t._t); t._t = setTimeout(() => t.style.display = 'none', 4500); }
+async function busy(btn, label, fn) {
+  const old = btn.textContent; btn.disabled = true; btn.textContent = label;
+  try { return await fn(); } catch (e) { toast(e.message); } finally { btn.disabled = false; btn.textContent = old; }
+}
+
+const TABS = {};  // filled in by dash.js
+let tab = 'plan';
+function nav() {
+  $('#nav').innerHTML = Object.entries(TABS).map(([k, v]) => `<button class="${k === tab ? 'on' : ''}" data-t="${k}">${v}</button>`).join('');
+  $('#nav').onclick = e => { if (e.target.dataset.t) { tab = e.target.dataset.t; render(); } };
+}
+async function render() { nav(); $('#main').innerHTML = ''; await VIEWS[tab](); }
+
+const urgency = d => d < 0 ? ['expired', 'bad'] : d <= 7 ? [d + ' days left', 'bad'] : d <= 21 ? [d + ' days left', 'warn'] : [d + ' days left', 'ok'];
+
+const VIEWS = {
+  async sch() {
+    const list = (await api('/scholarships?show_closed=' + showClosed)).filter(s => !searchQ || [s.name, s.provider, s.country, s.level, s.field].join(' ').toLowerCase().includes(searchQ.toLowerCase()));
+    $('#main').innerHTML = `<details class="card"><summary><h2 style="display:inline">＋ Add a scholarship</h2></summary><div class="row"><input id="u" placeholder="Paste scholarship page URL"><button class="btn" id="addu">Extract from URL</button></div>
+      <label>…or paste any text (announcement, email, post)</label><textarea id="t"></textarea><br><br><button class="btn" id="addt">Extract from text</button></details>
+      <div class="card">${searchQ ? `<span class="pill">search: ${esc(searchQ)}</span><a href="#" id="clq">clear</a>` : ''}<label class="chk"><input type="checkbox" id="sc" ${showClosed ? 'checked' : ''}> Also show closed scholarships (hidden by default: only open and upcoming are listed)</label><span class="mute">${list.length} shown</span></div>
+      <div id="list"></div>`;
+    if ($('#clq')) $('#clq').onclick = ev => { ev.preventDefault(); searchQ = ''; $('#gs').value = ''; render(); };
+    $('#sc').onchange = e => { showClosed = e.target.checked; render(); };
+    $('#addu').onclick = e => busy(e.target, 'Reading…', async () => { const r = await api('/scholarships/extract', {method: 'POST', body: {url: $('#u').value}}); toast(`Added ${r.added}`); render(); });
+    $('#addt').onclick = e => busy(e.target, 'Reading…', async () => { const r = await api('/scholarships/extract', {method: 'POST', body: {text: $('#t').value}}); toast(`Added ${r.added}`); render(); });
+    const box = $('#list');
+    list.forEach(s => {
+      const d = document.createElement('div'); d.className = 'card';
+      const days = s.deadline ? Math.ceil((new Date(s.deadline) - new Date()) / 864e5) : null;
+      const [ut, uc] = days === null ? ['no deadline', ''] : urgency(days);
+      d.style.cssText = 'padding:0;overflow:hidden';
+      d.innerHTML = `<div class="schhead art" style="--art:${art(s.name)}"><div class="top"><div><h3 style="font-size:18px">${esc(s.name)}</h3><div class="mute">${esc(s.provider)} · ${esc(s.country)} · ${esc(s.level)} · ${esc(s.field)}</div></div><span class="pill">${ut}</span></div></div><div style="padding:16px 20px 18px">
+        <div><span class="pill ${s.phase === 'open' ? 'ok' : s.phase === 'upcoming' ? 'warn' : ''}">${s.phase === 'upcoming' ? 'opens ' + esc(s.open_date) : s.phase === 'unknown' ? 'dates unconfirmed' : s.phase}</span>${s.fit ? `<span class="pill ${s.fit === 'yes' || s.fit === 'likely' ? 'ok' : 'warn'}" title="${esc(s.fit_reason)}">fit: ${esc(s.fit)}</span>` : ''}<span class="mute">${esc(s.fit_reason)}</span></div>
+        <p class="mute">${esc(s.funding)} ${s.eligibility ? '— ' + esc(s.eligibility) : ''}</p>
+        <div class="row"><div><label>Opens</label><input type="date" data-k="open_date" value="${esc(s.open_date)}"></div>
+        <div><label>Deadline</label><input type="date" data-k="deadline" value="${esc(s.deadline)}"></div>
+        <div><label>Status</label><select data-k="status">${['new','interested','preparing','submitted','interview','waitlisted','rejected','accepted','skipped'].map(o => `<option ${o === s.status ? 'selected' : ''}>${o}</option>`).join('')}</select></div></div>
+        <label>Required documents (tick when ready)</label><div class="docs"></div>
+        <label>Notes</label><textarea data-k="notes" style="min-height:50px">${esc(s.notes)}</textarea>
+        <p>${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">Official page</a> · ` : ''}<span class="mute">source: ${esc(s.source)}</span></p>
+        <button class="btn sm pin">${s.pinned ? "Tracked · open" : "Track"}</button> <button class="btn sm ghost res">Research dates & docs</button> <button class="btn sm ghost wr">Write letter</button> <button class="btn sm ghost del">Delete</button></div>`;
+      const docs = d.querySelector('.docs');
+      if (!s.required_docs.length) docs.innerHTML = '<span class="mute">None listed yet — try Research.</span>';
+      s.required_docs.forEach(doc => {
+        const l = document.createElement('label'); l.className = 'chk';
+        const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = s.docs_done.includes(doc);
+        cb.onchange = () => { s.docs_done = cb.checked ? [...s.docs_done, doc] : s.docs_done.filter(x => x !== doc); api('/scholarships/' + s.id, {method: 'PATCH', body: {docs_done: s.docs_done}}); };
+        l.append(cb, document.createTextNode(' ' + doc)); docs.append(l);
+      });
+      d.querySelectorAll('[data-k]').forEach(el => el.onchange = () => api('/scholarships/' + s.id, {method: 'PATCH', body: {[el.dataset.k]: el.value}}).then(() => el.dataset.k === 'deadline' && render()));
+      d.querySelector('.res').onclick = e => busy(e.target, 'Researching…', async () => { await api(`/scholarships/${s.id}/research`, {method: 'POST'}); render(); });
+      d.querySelector('.pin').onclick = async () => { if (!s.pinned) await api(`/scholarships/${s.id}/pin`, {method: 'POST', body: {pinned: true}}); appId = s.id; tab = 'app'; render(); };
+      d.querySelector('.wr').onclick = () => { writeFor = s.id; tab = 'write'; render(); };
+      d.querySelector('.del').onclick = async () => { if (confirm('Delete?')) { await api('/scholarships/' + s.id, {method: 'DELETE'}); render(); } };
+      box.append(d);
+    });
+  },
+
+  async me() {
+    const [p, docs, st] = await Promise.all([api('/profile'), api('/documents'), api('/profile/status')]);
+    const groups = {};
+    st.fields.forEach(f => (groups[f.group] ||= []).push(f));
+    const long = ['education', 'research_experience', 'work_experience', 'achievements', 'leadership', 'story', 'skills', 'language_tests', 'referees'];
+    $('#main').innerHTML = `<div class="card"><div class="top"><h2>Profile checklist</h2><span class="pill ${st.percent >= 80 ? 'ok' : 'warn'}">${st.percent}% complete</span></div>
+      <div class="bar"><i style="width:${st.percent}%"></i></div>
+      <p class="mute">${st.fields.filter(f => f.required && !f.done).map(f => '☐ ' + esc(f.label)).join(' &nbsp; ') || '✅ All required items filled'}
+      ${st.documents.map(d => `<br>${d.done ? '✅' : '☐'} ${esc(d.label)}`).join('')}</p></div>
+      <div class="card"><h2>Build from CV / LinkedIn</h2><p class="mute">Fills empty fields from your uploaded CV and any text pasted here (or sent by the extension's “Import my LinkedIn profile” button). Never overwrites what you wrote.</p>
+      <textarea id="imp" placeholder="Optional: paste your LinkedIn profile text"></textarea><br><br><button class="btn" id="impb">Import into profile</button></div>
+      <div class="card"><h2>🧠 Profile coach</h2><p class="mute">Not sure which major, country or scholarships fit you? Ask, or leave blank and click Ask for guidance on what to fill in next.</p>
+      <div class="row"><input id="cq" placeholder="e.g. I like AI and biology, which master's should I choose?"><button class="btn" id="cb" style="flex:0">Ask</button></div><div id="cr" class="mute" style="white-space:pre-wrap;margin-top:8px"></div></div>
+      ${Object.entries(groups).map(([g, fs]) => `<div class="card"><h2>${esc(g)}</h2>${fs.map(f => `<label>${esc(f.label)}${f.required ? ' *' : ''}</label>${long.includes(f.key) ? `<textarea data-k="${f.key}">${esc(p[f.key])}</textarea>` : `<input data-k="${f.key}" value="${esc(p[f.key])}">`}`).join('')}</div>`).join('')}
+      <button class="btn" id="save">Save profile</button>
+      <div class="card" style="margin-top:14px"><h2>Documents</h2><p class="mute">Upload CV, transcripts, old essays, certificates (PDF, DOCX, TXT). Upload past essays as kind "essay": they teach the writer your real voice.</p>
+      <div class="row"><select id="kind"><option>cv</option><option>transcript</option><option>essay</option><option>certificate</option><option>recommendation</option><option>other</option></select><input type="file" id="file"></div><br><button class="btn" id="up">Upload</button>
+      <div style="margin-top:12px">${docs.map(d => `<div class="chk"><span class="pill">${esc(d.kind)}</span> ${esc(d.name)} <span class="mute">${d.chars} chars</span> <button class="btn sm ghost" data-del="${d.id}">remove</button></div>`).join('')}</div></div>`;
+    const saveP = async () => { const data = {}; document.querySelectorAll('[data-k]').forEach(el => data[el.dataset.k] = el.value); await api('/profile', {method: 'PUT', body: {data}}); };
+    $('#save').onclick = async () => { await saveP(); toast('Saved'); render(); };
+    $('#impb').onclick = e => busy(e.target, 'Reading…', async () => { const r = await api('/profile/import', {method: 'POST', body: {text: $('#imp').value}}); toast(`Filled: ${r.filled.join(', ') || 'nothing new'}`); render(); });
+    $('#cb').onclick = e => busy(e.target, '…', async () => { await saveP(); $('#cr').textContent = (await api('/profile/coach', {method: 'POST', body: {question: $('#cq').value}})).reply; });
+    $('#up').onclick = e => busy(e.target, 'Uploading…', async () => { const f = $('#file').files[0]; if (!f) return toast('Choose a file'); const fd = new FormData(); fd.append('file', f); await api('/documents?kind=' + $('#kind').value, {method: 'POST', body: fd}); render(); });
+    document.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => { await api('/documents/' + b.dataset.del, {method: 'DELETE'}); render(); });
+  },
+
+  async write() {
+    const [list, letters, tpls] = await Promise.all([api('/scholarships'), api('/letters'), api('/templates')]);
+    const opts = '<option value="">— none —</option>' + list.map(s => `<option value="${s.id}" ${s.id === writeFor ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
+    $('#main').innerHTML = `<div class="grid2"><div>
+      <div class="card"><h2>Motivation letter</h2><label>Scholarship</label><select id="ms">${opts}</select>
+      <button class="btn sm ghost" id="iv" style="margin-top:8px">💬 Interview me first (recommended)</button><div id="qs"></div>
+      <label>Your answers / extra material</label><textarea id="ea"></textarea>
+      <label>Template (from Letter lab)</label><select id="tp"><option value="">— none —</option>${tpls.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select>
+      <label>Angle you want to take (optional)</label><input id="ang"><div class="row"><div><label>Words</label><input id="wl" type="number" value="600"></div><div><label>Tone</label><input id="tone" value="sincere, confident, reflective"></div></div><br>
+      <button class="btn" id="gm">Generate letter</button></div>
+      <div class="card"><h2>Professor email / cover letter</h2><div class="row"><div><label>Professor</label><input id="pn"></div><div><label>University</label><input id="pu"></div></div>
+      <label>Their research interests</label><input id="pr"><label>A specific paper/project to reference</label><input id="pp"><label>Linked scholarship (optional)</label><select id="ps">${opts}</select>
+      <label>Format</label><select id="pf"><option value="1">Cold email</option><option value="">Formal cover letter</option></select><br><br><button class="btn" id="gp">Generate</button></div></div>
+      <div><div class="card"><h2>Editor</h2><textarea id="out" class="letter" placeholder="Generated text appears here — edit freely."></textarea>
+      <div class="row" style="margin-top:8px"><input id="ref" placeholder="Refine: e.g. make the opening more personal, cut 100 words"><button class="btn" id="rb" style="flex:0">Refine</button></div>
+      <p><button class="btn sm ghost" id="sv">Save version</button> <button class="btn sm ghost" id="hm">🧑 Make it sound like me</button> <button class="btn sm ghost" id="ck">🔍 Authenticity check</button> <button class="btn sm ghost" id="cp">Copy</button></p>
+      <div id="chk" class="mute" style="white-space:pre-wrap"></div>
+      <p class="mute">No tool can guarantee a text is "100% human" or passes every AI detector (detectors are unreliable). What works is real, specific detail from your life. The check flags generic sentences and asks the questions that fix them.</p></div>
+      <div class="card"><h2>Version history</h2><div id="vh" class="mute">Select or generate a letter.</div><div id="df" class="letter" style="min-height:0;margin-top:8px"></div></div>
+      <div class="card"><h2>Saved drafts</h2>${letters.map(l => `<div class="chk"><a href="#" data-l="${l.id}">${esc(l.title)}</a></div>`).join('') || '<span class="mute">None yet</span>'}</div></div></div>`;
+    let cur = null;
+    const loadVersions = async () => {
+      if (!cur) return;
+      const vs = await api(`/letters/${cur}/versions`);
+      $('#vh').innerHTML = vs.map((v, i) => `<div class="chk">v${v.n} · ${esc(v.note)} · ${esc(v.created)} ${i + 1 < vs.length ? `<button class="btn sm ghost" data-d="${vs[i + 1].n},${v.n}">changes</button>` : ''} ${i ? `<button class="btn sm ghost" data-r="${v.n}">restore</button>` : '<span class="pill ok">current</span>'}</div>`).join('');
+      $('#vh').querySelectorAll('[data-d]').forEach(b => b.onclick = async () => { const [x, y] = b.dataset.d.split(','); const d = await api(`/letters/${cur}/diff?a=${x}&b=${y}`); $('#df').innerHTML = d.map(c => c.op === 'eq' ? esc(c.text) : c.op === 'ins' ? `<ins style="background:#2f9e4433">${esc(c.text)}</ins>` : `<del style="background:#c92a2a33">${esc(c.text)}</del>`).join(''); });
+      $('#vh').querySelectorAll('[data-r]').forEach(b => b.onclick = async () => { const r = await api(`/letters/${cur}/restore/${b.dataset.r}`, {method: 'POST'}); $('#out').value = r.content; loadVersions(); });
+    };
+    const show = r => { cur = r.id ?? cur; $('#out').value = r.content; $('#df').innerHTML = ''; loadVersions(); };
+    $('#iv').onclick = e => busy(e.target, 'Thinking…', async () => { const id = $('#ms').value; if (!id) return toast('Pick a scholarship'); const r = await api('/write/interview/' + id, {method: 'POST'}); $('#qs').innerHTML = '<ol class="mute">' + r.questions.map(q => `<li>${esc(q)}</li>`).join('') + '</ol>'; });
+    $('#gm').onclick = e => busy(e.target, 'Writing…', async () => { const id = $('#ms').value; if (!id) return toast('Pick a scholarship'); show(await api('/write/motivation', {method: 'POST', body: {scholarship_id: +id, angle: $('#ang').value, word_limit: +$('#wl').value, tone: $('#tone').value, extra_answers: $('#ea').value, template_id: $('#tp').value ? +$('#tp').value : null}})); });
+    $('#gp').onclick = e => busy(e.target, 'Writing…', async () => show(await api('/write/professor', {method: 'POST', body: {scholarship_id: $('#ps').value ? +$('#ps').value : null, professor_name: $('#pn').value, university: $('#pu').value, research_interests: $('#pr').value, paper_or_project: $('#pp').value, as_email: !!$('#pf').value}})));
+    $('#rb').onclick = e => busy(e.target, '…', async () => { const r = await api('/write/refine', {method: 'POST', body: {content: $('#out').value, instruction: $('#ref').value, letter_id: cur}}); show(r); });
+    $('#sv').onclick = async () => { if (cur) { await api('/letters/' + cur, {method: 'PUT', body: {content: $('#out').value}}); toast('Saved as new version'); loadVersions(); } };
+    $('#hm').onclick = e => busy(e.target, 'Rewriting…', async () => show(await api('/write/humanize', {method: 'POST', body: {content: $('#out').value, letter_id: cur}})));
+    $('#ck').onclick = e => busy(e.target, 'Reading…', async () => { const r = await api('/write/check', {method: 'POST', body: {content: $('#out').value}}); const sc = r.scan; $('#chk').textContent = `Stock phrases: ${sc.stock_phrases.join(', ') || 'none'} · em dashes: ${sc.em_dashes} · sentence-length spread: ${sc.sentence_length_spread}${sc.uniform_rhythm ? ' (too uniform)' : ''}\n\n` + r.critique; });
+    $('#cp').onclick = () => navigator.clipboard.writeText($('#out').value).then(() => toast('Copied'));
+    document.querySelectorAll('[data-l]').forEach(a => a.onclick = ev => { ev.preventDefault(); const l = letters.find(x => x.id == a.dataset.l); show(l); });
+  },
+
+  async li() {
+    $('#main').innerHTML = `<div class="card"><h2>LinkedIn saved posts</h2>
+      <ol><li>Open <code>chrome://extensions</code>, enable Developer mode, click <b>Load unpacked</b>, choose the <code>extension</code> folder of this project.</li>
+      <li>Go to <a href="https://www.linkedin.com/my-items/saved-posts/" target="_blank" rel="noopener">your LinkedIn saved posts</a> (scroll to load the ones you want).</li>
+      <li>Click the ScholarPilot extension icon → <b>Scroll &amp; send all saved posts</b>. It scrolls the page by itself until everything is loaded, removes duplicates, skips posts that are not about scholarships and ones it has already processed, then analyses the rest. You can close the popup; it keeps running. The AI reads each post and also opens the websites it links to. If a link is a blog/aggregator listing many scholarships, it follows through to each scholarship's own page and reads the real requirements.</li></ol>
+      <p class="mute">The extension only reads the page you're viewing, in your own browser session. Nothing is scraped in the background and no password is stored.</p></div>
+      <div class="card"><h2>Re-check everything</h2><p class="mute">The server remembers posts it has already looked at (including ones it judged not to be about scholarships) so repeat runs are fast and cheap. Reset that memory if you want every saved post analysed again.</p><button class="btn ghost" id="rs">Forget processed posts</button></div>
+      <div class="card"><h2>No extension? Paste posts</h2><textarea id="pt" placeholder="Paste one or more posts"></textarea><br><br><button class="btn" id="pg">Extract</button></div>`;
+    $('#rs').onclick = async () => { await api('/linkedin/reset-seen', {method: 'POST'}); toast('Memory cleared'); };
+    $('#pg').onclick = e => busy(e.target, 'Reading…', async () => { const r = await api('/linkedin/ingest', {method: 'POST', body: {posts: [{text: $('#pt').value}]}}); toast(`${r.scholarships} scholarships found`); });
+  },
+};
+let writeFor = null, appId = null, showClosed = false, searchQ = '';
+</script>
+<script src="/static/extra.js"></script>
+<script src="/static/dash.js"></script>
+</body>
+</html>

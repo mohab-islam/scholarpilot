@@ -1,0 +1,13 @@
+<!doctype html><html><body style="width:300px;font:14px system-ui;padding:12px">
+<b>ScholarPilot</b>
+<details style="margin:6px 0"><summary style="cursor:pointer;color:#666">Server settings</summary>
+<input id="srv" placeholder="https://your-server (blank = local)" style="width:100%;margin:4px 0;padding:5px">
+<input id="tok" type="password" placeholder="Extension token" style="width:100%;margin-bottom:4px;padding:5px">
+<button id="savecfg" style="width:100%;padding:5px">Save</button></details>
+<p style="color:#666;margin:6px 0">Open LinkedIn → Saved posts, then:</p>
+<button id="go" style="width:100%;padding:9px;font-weight:600">Scroll &amp; send all saved posts</button>
+<button id="stop" style="width:100%;padding:6px;margin-top:6px;display:none">Stop scrolling and send what is loaded</button>
+<div id="bar" style="height:6px;background:#ddd;border-radius:4px;margin-top:10px;display:none"><i id="fill" style="display:block;height:100%;width:0;background:#34503d;border-radius:4px"></i></div>
+<p id="msg" style="white-space:pre-line;margin:8px 0"></p>
+<hr><button id="prof" style="width:100%;padding:7px">Import my LinkedIn profile</button>
+<script src="popup.js"></script></body></html>

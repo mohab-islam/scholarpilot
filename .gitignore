@@ -1,0 +1,19 @@
+# Secrets and local state
+.env
+.env.*
+!.env.example
+data/
+deploy/
+SETUP.md
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

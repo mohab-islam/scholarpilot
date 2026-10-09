@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "ScholarPilot – LinkedIn Saved Posts",
+  "version": "2.0",
+  "description": "Scrolls your LinkedIn saved posts, removes duplicates and sends the scholarship-related ones to your ScholarPilot server.",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "optional_host_permissions": ["https://*/*"],
+  "host_permissions": ["http://127.0.0.1:8000/*", "https://www.linkedin.com/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html" }
+}
