@@ -1,5 +1,7 @@
 // Runs the whole job in the service worker so it keeps going if the popup is closed.
 let running = false, stopFlag = false;
+try { importScripts("config.local.js"); } catch (e) { /* optional local defaults (server URL and token) */ }
+const LOCAL = (typeof self !== "undefined" && self.SP_CONFIG) || {};
 
 const setStatus = s => chrome.storage.local.set({ status: { ...s, t: Date.now() } });
 
@@ -32,15 +34,32 @@ function scrapePosts() {
 }
 // -------------------------------------------------------------------------------------
 
+async function serverConfig() {
+  const cfg = await chrome.storage.local.get(["srv", "tok"]);
+  const base = (cfg.srv || LOCAL.srv || "http://127.0.0.1:8000").replace(/\/$/, "");
+  const tok = cfg.tok || LOCAL.tok || "";
+  return { base, headers: { "Content-Type": "application/json", ...(tok ? { "X-API-Key": tok } : {}) } };
+}
+
+async function importProfile(tabId) {
+  try {
+    await setStatus({ phase: "sending", text: "Reading this profile…", pct: 30 });
+    const { base, headers } = await serverConfig();
+    const [{ result }] = await chrome.scripting.executeScript({ target: { tabId }, func: () => document.body.innerText.slice(0, 40000) });
+    const r = await fetch(base + "/api/profile/import", { method: "POST", headers, body: JSON.stringify({ text: result }) });
+    const j = await r.json().catch(() => ({}));
+    await setStatus({ phase: r.ok ? "done" : "error", pct: 100,
+      text: r.ok ? "Profile updated. Fields filled: " + ((j.filled || []).join(", ") || "none (nothing new)") : "Server said: " + (j.detail || r.status) });
+  } catch (e) { await setStatus({ phase: "error", text: "Error: " + e.message, pct: 100 }); }
+}
+
 function activityId(p) { const m = /(?:urn:li:activity:|activity-)(\d{8,})/.exec(p.url || ""); return m ? m[1] : ""; }
 
 async function run(tabId) {
   if (running) return;
   running = true; stopFlag = false;
   try {
-    const cfg = await chrome.storage.local.get(["srv", "tok"]);
-    const base = (cfg.srv || "http://127.0.0.1:8000").replace(/\/$/, "");
-    const headers = { "Content-Type": "application/json", ...(cfg.tok ? { "X-API-Key": cfg.tok } : {}) };
+    const { base, headers } = await serverConfig();
 
     // 1) scroll until nothing new loads
     let same = 0, last = "", iter = 0;
@@ -83,7 +102,9 @@ async function run(tabId) {
   } finally { running = false; }
 }
 
-chrome.runtime.onMessage.addListener((msg, _s, reply) => {
-  if (msg.type === "start") { run(msg.tabId); reply({ ok: true }); }
+chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+  const tabId = msg.tabId ?? (sender.tab && sender.tab.id);
+  if (msg.type === "start") { run(tabId); reply({ ok: true }); }
+  if (msg.type === "profile") { importProfile(tabId); reply({ ok: true }); }
   if (msg.type === "stop") { stopFlag = true; reply({ ok: true }); }
 });

@@ -1,11 +1,12 @@
-let BASE = "http://127.0.0.1:8000", TOKEN = "";
+const LOCAL = (typeof SP_CONFIG !== "undefined" && SP_CONFIG) || {};
+let BASE = LOCAL.srv || "http://127.0.0.1:8000", TOKEN = LOCAL.tok || "";
 const $ = id => document.getElementById(id);
 const msg = t => ($("msg").textContent = t);
 const hdrs = () => ({ "Content-Type": "application/json", ...(TOKEN ? { "X-API-Key": TOKEN } : {}) });
 
 chrome.storage.local.get(["srv", "tok"], v => {
   if (v.srv) BASE = v.srv.replace(/\/$/, "");
-  TOKEN = v.tok || "";
+  TOKEN = v.tok || LOCAL.tok || "";
   $("srv").value = v.srv || ""; $("tok").value = v.tok || "";
 });
 
