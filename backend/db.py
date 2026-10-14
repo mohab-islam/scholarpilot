@@ -35,6 +35,12 @@ CREATE TABLE IF NOT EXISTS professors (
   department TEXT, lab TEXT, research_interests TEXT, recent_work TEXT, email TEXT, homepage TEXT,
   why_fit TEXT, status TEXT DEFAULT 'found', letter_id INTEGER, created TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS seen_posts (key TEXT PRIMARY KEY, verdict TEXT, created TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS ingest_queue (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, post TEXT, status TEXT DEFAULT 'pending', created TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, title TEXT, body TEXT, ref_id INTEGER, read INTEGER DEFAULT 0,
+  created TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS todos (
   id INTEGER PRIMARY KEY AUTOINCREMENT, scholarship_id INTEGER, text TEXT, kind TEXT DEFAULT 'step',
   done INTEGER DEFAULT 0, source TEXT DEFAULT 'auto', detail TEXT DEFAULT '', created TEXT DEFAULT CURRENT_TIMESTAMP);
@@ -45,7 +51,9 @@ CREATE TABLE IF NOT EXISTS mail_events (
 
 MIGRATIONS = {
     "scholarships": [("pinned", "INTEGER DEFAULT 0"), ("steps_done", "TEXT DEFAULT '[]'"),
-                     ("research", "TEXT DEFAULT ''"), ("fit", "TEXT DEFAULT ''"), ("fit_reason", "TEXT DEFAULT ''"), ("eligibility_check", "TEXT DEFAULT ''")],
+                     ("research", "TEXT DEFAULT ''"), ("fit", "TEXT DEFAULT ''"), ("fit_reason", "TEXT DEFAULT ''"), ("eligibility_check", "TEXT DEFAULT ''"), ("verdict", "TEXT DEFAULT ''"),
+                     ("verdict_reason", "TEXT DEFAULT ''"), ("verified_at", "TEXT DEFAULT ''"),
+                     ("confidence", "TEXT DEFAULT ''"), ("application_mode", "TEXT DEFAULT ''"), ("application_fee", "TEXT DEFAULT ''")],
 }
 
 JSON_COLS = ("required_docs", "docs_done", "steps_done")
@@ -66,6 +74,9 @@ def init():
             for name, decl in cols:
                 if name not in have:
                     c.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+        # one-off backfill: rows from before verification existed
+        c.execute("UPDATE scholarships SET verdict='qualified' WHERE verdict='' AND (source IN ('manual','research') OR pinned=1)")
+        c.execute("UPDATE scholarships SET verdict='pending' WHERE verdict=''")
 
 
 def row(r):

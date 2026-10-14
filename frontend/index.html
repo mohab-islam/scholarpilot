@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ScholarPilot</title>
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<meta name="theme-color" content="#34503d">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/theme.css">
@@ -50,30 +52,55 @@ const urgency = d => d < 0 ? ['expired', 'bad'] : d <= 7 ? [d + ' days left', 'b
 
 const VIEWS = {
   async sch() {
-    const list = (await api('/scholarships?show_closed=' + showClosed)).filter(s => !searchQ || [s.name, s.provider, s.country, s.level, s.field].join(' ').toLowerCase().includes(searchQ.toLowerCase()));
+    const counts = await api('/scholarships/counts');
+    const list = (await api('/scholarships?view=' + schView)).filter(s => !searchQ || [s.name, s.provider, s.country, s.level, s.field].join(' ').toLowerCase().includes(searchQ.toLowerCase()));
     $('#main').innerHTML = `<details class="card"><summary><h2 style="display:inline">＋ Add a scholarship</h2></summary><div class="row"><input id="u" placeholder="Paste scholarship page URL"><button class="btn" id="addu">Extract from URL</button></div>
       <label>…or paste any text (announcement, email, post)</label><textarea id="t"></textarea><br><br><button class="btn" id="addt">Extract from text</button></details>
-      <div class="card">${searchQ ? `<span class="pill">search: ${esc(searchQ)}</span><a href="#" id="clq">clear</a>` : ''}<label class="chk"><input type="checkbox" id="sc" ${showClosed ? 'checked' : ''}> Also show closed scholarships (hidden by default: only open and upcoming are listed)</label><span class="mute">${list.length} shown</span></div>
+      <div class="card">${searchQ ? `<span class="pill">search: ${esc(searchQ)}</span><a href="#" id="clq">clear</a>` : ''}<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">${[['qualified', 'Open & eligible'], ['review', 'Dates unconfirmed'], ['rejected', 'Filtered out'], ['pending', 'Verifying']].map(([k, l]) => `<button class="btn sm ${schView === k ? '' : 'ghost'}" data-view="${k}">${l} · ${counts[k] || 0}</button>`).join('')}<button class="btn sm ghost" id="rv">Re-check filtered</button>${counts.pending ? '<span class="mute">verifying in the background…</span>' : ''}</div><div class="mute" style="margin-top:6px">Everything found automatically is checked for dates, documents and eligibility. Only open or upcoming scholarships you can apply for are shown by default.</div></div>
+      <div class="bulk"><label class="chk"><input type="checkbox" id="selall"> Select all ${list.length}</label><span class="mute" id="selcount"></span></div>
       <div id="list"></div>`;
     if ($('#clq')) $('#clq').onclick = ev => { ev.preventDefault(); searchQ = ''; $('#gs').value = ''; render(); };
-    $('#sc').onchange = e => { showClosed = e.target.checked; render(); };
+    document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => { schView = b.dataset.view; render(); });
+    $('#rv').onclick = async () => { await api('/verify/reset', {method: 'POST'}); toast('Re-checking filtered scholarships'); render(); };
     $('#addu').onclick = e => busy(e.target, 'Reading…', async () => { const r = await api('/scholarships/extract', {method: 'POST', body: {url: $('#u').value}}); toast(`Added ${r.added}`); render(); });
     $('#addt').onclick = e => busy(e.target, 'Reading…', async () => { const r = await api('/scholarships/extract', {method: 'POST', body: {text: $('#t').value}}); toast(`Added ${r.added}`); render(); });
     const box = $('#list');
+    const bar = document.getElementById('bulkbar') || Object.assign(document.createElement('div'), {id: 'bulkbar', className: 'bulkbar'});
+    document.body.append(bar);
+    const ids = list.map(x => x.id);
+    selected = new Set([...selected].filter(i => ids.includes(i)));
+    const updateBulk = () => {
+      $('#selcount').textContent = selected.size ? `${selected.size} selected` : '';
+      $('#selall').checked = ids.length > 0 && selected.size === ids.length;
+      bar.classList.toggle('on', selected.size > 0);
+      bar.innerHTML = `<b>${selected.size} selected</b><button class="btn sm" data-a="track">Track all</button><button class="btn sm ghost" data-a="skip">Not interested</button><button class="btn sm ghost" data-a="clear">Clear</button>`;
+      bar.querySelectorAll('button').forEach(b => b.onclick = async () => {
+        if (b.dataset.a === 'clear') { selected.clear(); document.querySelectorAll('[data-sel]').forEach(x => x.checked = false); return updateBulk(); }
+        const r = await api('/scholarships/bulk', {method: 'POST', body: {ids: [...selected], action: b.dataset.a}});
+        toast(b.dataset.a === 'track' ? `Tracking ${r.changed}. Requirements are being read from the official pages.` : `${r.changed} updated`);
+        selected.clear(); render();
+      });
+    };
+    $('#selall').onchange = e => { e.target.checked ? ids.forEach(i => selected.add(i)) : selected.clear(); document.querySelectorAll('[data-sel]').forEach(x => x.checked = e.target.checked); updateBulk(); };
+    updateBulk();
     list.forEach(s => {
       const d = document.createElement('div'); d.className = 'card';
       const days = s.deadline ? Math.ceil((new Date(s.deadline) - new Date()) / 864e5) : null;
       const [ut, uc] = days === null ? ['no deadline', ''] : urgency(days);
       d.style.cssText = 'padding:0;overflow:hidden';
-      d.innerHTML = `<div class="schhead art" style="--art:${art(s.name)}"><div class="top"><div><h3 style="font-size:18px">${esc(s.name)}</h3><div class="mute">${esc(s.provider)} · ${esc(s.country)} · ${esc(s.level)} · ${esc(s.field)}</div></div><span class="pill">${ut}</span></div></div><div style="padding:16px 20px 18px">
-        <div><span class="pill ${s.phase === 'open' ? 'ok' : s.phase === 'upcoming' ? 'warn' : ''}">${s.phase === 'upcoming' ? 'opens ' + esc(s.open_date) : s.phase === 'unknown' ? 'dates unconfirmed' : s.phase}</span>${s.fit ? `<span class="pill ${s.fit === 'yes' || s.fit === 'likely' ? 'ok' : 'warn'}" title="${esc(s.fit_reason)}">fit: ${esc(s.fit)}</span>` : ''}<span class="mute">${esc(s.fit_reason)}</span></div>
+      d.innerHTML = `<div class="schhead art" style="--art:${art(s.name)}"><label class="selbox"><input type="checkbox" data-sel="${s.id}" ${selected.has(s.id) ? 'checked' : ''}></label><div class="top"><div><h3 style="font-size:18px">${esc(s.name)}</h3><div class="mute">${esc(s.provider)} · ${esc(s.country)} · ${esc(s.level)} · ${esc(s.field)}</div></div><span class="pill">${ut}</span></div></div><div style="padding:16px 20px 18px">
+        <div><span class="pill ${s.phase === 'open' ? 'ok' : s.phase === 'upcoming' ? 'warn' : ''}">${s.phase === 'upcoming' ? 'opens ' + esc(s.open_date) : s.phase === 'unknown' ? 'dates unconfirmed' : s.phase}</span>${s.fit ? `<span class="pill ${s.fit === 'yes' || s.fit === 'likely' ? 'ok' : 'warn'}" title="${esc(s.fit_reason)}">fit: ${esc(s.fit)}</span>` : ''}<span class="mute">${esc(s.fit_reason)}</span>${s.application_mode ? `<span class="pill">${esc(s.application_mode)} application</span>` : ''}${s.application_fee ? `<span class="pill">fee: ${esc(s.application_fee)}</span>` : ''}${s.confidence === 'confirmed' ? '<span class="pill ok">✓ confirmed on the official page</span>' : s.confidence === 'official' ? '<span class="pill ok">✓ date from the official page</span>' : s.confidence === 'single-source' ? '<span class="pill warn">single source, verify</span>' : ''}${s.verdict_reason ? `<div class="mute">${esc(s.verdict_reason)}</div>` : ''}</div>
         <p class="mute">${esc(s.funding)} ${s.eligibility ? '— ' + esc(s.eligibility) : ''}</p>
+        <details class="more"><summary>Edit dates, fee, documents and notes</summary>
         <div class="row"><div><label>Opens</label><input type="date" data-k="open_date" value="${esc(s.open_date)}"></div>
         <div><label>Deadline</label><input type="date" data-k="deadline" value="${esc(s.deadline)}"></div>
         <div><label>Status</label><select data-k="status">${['new','interested','preparing','submitted','interview','waitlisted','rejected','accepted','skipped'].map(o => `<option ${o === s.status ? 'selected' : ''}>${o}</option>`).join('')}</select></div></div>
+        <div class="row"><div><label>Application type</label><select data-k="application_mode">${['', 'online', 'offline', 'both'].map(o => `<option value="${o}" ${o === (s.application_mode || '') ? 'selected' : ''}>${o || 'not stated'}</option>`).join('')}</select></div>
+        <div><label>Application fee</label><input data-k="application_fee" value="${esc(s.application_fee)}" placeholder="e.g. EUR 50, Free"></div></div>
         <label>Required documents (tick when ready)</label><div class="docs"></div>
         <label>Notes</label><textarea data-k="notes" style="min-height:50px">${esc(s.notes)}</textarea>
         <p>${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">Official page</a> · ` : ''}<span class="mute">source: ${esc(s.source)}</span></p>
+        </details>
         <button class="btn sm pin">${s.pinned ? "Tracked · open" : "Track"}</button> <button class="btn sm ghost res">Research dates & docs</button> <button class="btn sm ghost wr">Write letter</button> <button class="btn sm ghost del">Delete</button></div>`;
       const docs = d.querySelector('.docs');
       if (!s.required_docs.length) docs.innerHTML = '<span class="mute">None listed yet — try Research.</span>';
@@ -88,8 +115,11 @@ const VIEWS = {
       d.querySelector('.pin').onclick = async () => { if (!s.pinned) await api(`/scholarships/${s.id}/pin`, {method: 'POST', body: {pinned: true}}); appId = s.id; tab = 'app'; render(); };
       d.querySelector('.wr').onclick = () => { writeFor = s.id; tab = 'write'; render(); };
       d.querySelector('.del').onclick = async () => { if (confirm('Delete?')) { await api('/scholarships/' + s.id, {method: 'DELETE'}); render(); } };
+      d.querySelector('[data-sel]').onchange = e => { e.target.checked ? selected.add(s.id) : selected.delete(s.id); updateBulk(); };
+      d.style.animationDelay = Math.min(box.children.length, 12) * 40 + 'ms';
       box.append(d);
     });
+    if (!list.length) box.innerHTML = '<div class="card mute" style="text-align:center;padding:36px">Nothing here yet. Run a sweep from Discover, or import your LinkedIn saved posts.</div>';
   },
 
   async me() {
@@ -170,7 +200,7 @@ const VIEWS = {
     $('#pg').onclick = e => busy(e.target, 'Reading…', async () => { const r = await api('/linkedin/ingest', {method: 'POST', body: {posts: [{text: $('#pt').value}]}}); toast(`${r.scholarships} scholarships found`); });
   },
 };
-let writeFor = null, appId = null, showClosed = false, searchQ = '';
+let writeFor = null, appId = null, schView = 'qualified', searchQ = '', selected = new Set();
 </script>
 <script src="/static/extra.js"></script>
 <script src="/static/dash.js"></script>

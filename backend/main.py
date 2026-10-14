@@ -11,7 +11,7 @@ from pathlib import Path
 
 import httpx
 from bs4 import BeautifulSoup
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse
@@ -23,10 +23,14 @@ import db
 import auth
 import inbox
 import pipeline
+import jobs
+import verifier
 
 @asynccontextmanager
 async def lifespan(_app):
     inbox.start_watcher()  # background Gmail checks (only when WATCH_INTERVAL_MIN > 0)
+    verifier.start()  # checks dates, documents and eligibility of everything discovered automatically
+    jobs.start()  # LinkedIn ingest queue and the daily internet sweep
     yield
 
 
@@ -223,6 +227,85 @@ def norm_name(n):
     return short or re.sub(r"[^a-z0-9]+", "", (n or "").lower())
 
 
+NAME_STOP = {"scholarship", "scholarships", "fellowship", "fellowships", "programme", "programmes", "program", "programs",
+             "award", "awards", "for", "the", "and", "in", "of", "international", "students", "student", "fully", "funded",
+             "master", "masters", "master's", "phd", "degree", "full", "joint", "study", "studies", "to", "at", "a"}
+
+
+def name_tokens(n):
+    n = re.sub(r"\b(?:19|20)\d{2}(?:[/-]\d{2,4})?\b", " ", (n or "").lower())
+    return {t for t in re.findall(r"[a-z0-9]+", n) if t not in NAME_STOP and len(t) > 1}
+
+
+def canon_url(u):
+    p = urlparse((u or "").strip().lower())
+    host = p.netloc.removeprefix("www.")
+    return f"{host}{p.path.rstrip('/')}" if host else ""
+
+
+def same_scholarship(a, b):
+    """True when two records describe the same programme (same page, same name, or near-identical name)."""
+    ua, ub = canon_url(a.get("url")), canon_url(b.get("url"))
+    if ua and ua == ub and "/" in ua:  # same page (a bare home page alone does not prove it is the same programme)
+        return True
+    if norm_name(a.get("name")) and norm_name(a.get("name")) == norm_name(b.get("name")):
+        return True
+    ta, tb = name_tokens(a.get("name")), name_tokens(b.get("name"))
+    if not ta or not tb:
+        return False
+    pa, pb = (a.get("provider") or "").lower().strip(), (b.get("provider") or "").lower().strip()
+    provider_ok = not pa or not pb or pa in pb or pb in pa
+    inter = len(ta & tb)
+    jaccard = inter / len(ta | tb)
+    subset = (ta <= tb or tb <= ta) and min(len(ta), len(tb)) >= 2
+    return provider_ok and (jaccard >= 0.75 or subset)
+
+
+def merge_duplicates():
+    """Collapse records that describe the same scholarship (from LinkedIn, sweeps, manual adds) into one."""
+    with db.conn() as c:
+        rows = db.rows(c.execute("SELECT * FROM scholarships"))
+        parent = {r["id"]: r["id"] for r in rows}
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        for i, a in enumerate(rows):
+            for b in rows[i + 1:]:
+                if find(a["id"]) != find(b["id"]) and same_scholarship(a, b):
+                    parent[find(b["id"])] = find(a["id"])
+        groups = {}
+        for r in rows:
+            groups.setdefault(find(r["id"]), []).append(r)
+        merged = 0
+        for g in (g for g in groups.values() if len(g) > 1):
+            def richness(r):
+                return (bool(r["pinned"]), r["source"] == "manual", bool(r["deadline"]), len(r["required_docs"]),
+                        bool(r["url"]), -r["id"])
+            keeper, *others = sorted(g, key=richness, reverse=True)
+            for o in others:
+                for col in ("provider", "country", "level", "field", "funding", "url", "open_date", "deadline",
+                            "eligibility", "fit", "fit_reason", "application_mode", "application_fee", "confidence"):
+                    if not keeper[col] and o[col]:
+                        c.execute(f"UPDATE scholarships SET {col}=? WHERE id=?", (o[col], keeper["id"]))
+                        keeper[col] = o[col]
+                docs = list(dict.fromkeys(keeper["required_docs"] + o["required_docs"]))
+                c.execute("UPDATE scholarships SET required_docs=? WHERE id=?", (json.dumps(docs), keeper["id"]))
+                keeper["required_docs"] = docs
+                if o["verdict"] == "qualified" and keeper["verdict"] != "qualified":
+                    c.execute("UPDATE scholarships SET verdict='qualified', verdict_reason='' WHERE id=?", (keeper["id"],))
+                    keeper["verdict"] = "qualified"
+                for table in ("todos", "professors", "letters"):
+                    c.execute(f"UPDATE {table} SET scholarship_id=? WHERE scholarship_id=?", (keeper["id"], o["id"]))
+                c.execute("UPDATE notifications SET ref_id=? WHERE ref_id=?", (keeper["id"], o["id"]))
+                c.execute("DELETE FROM scholarships WHERE id=?", (o["id"],))
+                merged += 1
+    return merged
+
+
 def save_scholarship(s, source):
     """Insert or update by url (or name when no url). Returns id, or None if filtered out
     (closed, wrong degree level, or the applicant is not eligible)."""
@@ -233,17 +316,17 @@ def save_scholarship(s, source):
             existing = c.execute("SELECT id FROM scholarships WHERE url=?", (url,)).fetchone()
         if not existing and s.get("name"):
             existing = c.execute("SELECT id FROM scholarships WHERE lower(name)=lower(?)", (s["name"],)).fetchone()
-            if not existing:  # same scholarship under a slightly different title ("DAAD 2026" vs "DAAD Scholarship")
-                key = norm_name(s["name"])
-                for r in c.execute("SELECT id,name FROM scholarships"):
-                    if key and norm_name(r["name"]) == key:
-                        existing = r
-                        break
+        if not existing and (s.get("name") or url):
+            # the same programme under another title or URL ("DAAD 2026" vs "DAAD Scholarship", blog vs official page)
+            for r in c.execute("SELECT id,name,url,provider FROM scholarships"):
+                if same_scholarship({"name": s.get("name"), "url": url, "provider": s.get("provider")}, dict(r)):
+                    existing = r
+                    break
         if not existing and source not in ("manual", "research") and not admissible(s):
             return None
         vals = {k: s.get(k) or "" for k in
                 ("name", "provider", "country", "level", "field", "funding", "open_date", "deadline", "eligibility",
-                 "fit", "fit_reason")}
+                 "fit", "fit_reason", "application_mode", "application_fee")}
         docs = json.dumps([d for d in (s.get("required_docs") or []) if isinstance(d, str)])
         if existing:
             sets = ", ".join(f"{k}=?" for k in vals if vals[k])
@@ -255,21 +338,147 @@ def save_scholarship(s, source):
             return existing["id"]
         cur = c.execute(
             "INSERT INTO scholarships(name,provider,country,level,field,funding,url,open_date,deadline,"
-            "required_docs,eligibility,source,fit,fit_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "required_docs,eligibility,source,fit,fit_reason,verdict,application_mode,application_fee) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (vals["name"], vals["provider"], vals["country"], vals["level"], vals["field"], vals["funding"],
-             url, vals["open_date"], vals["deadline"], docs, vals["eligibility"], source, vals["fit"], vals["fit_reason"]))
+             url, vals["open_date"], vals["deadline"], docs, vals["eligibility"], source, vals["fit"], vals["fit_reason"],
+             "qualified" if source in ("manual", "research") else "pending",
+             vals["application_mode"], vals["application_fee"]))
+        if source not in ("manual", "research"):
+            verifier.kick()
         return cur.lastrowid
 
 
 @app.get("/api/scholarships")
-def list_scholarships(show_closed: bool = False):
+def list_scholarships(view: str = "qualified"):
+    """view: qualified (default: open or upcoming, and eligible) | review | rejected | pending | all"""
     with db.conn() as c:
         rows_ = db.rows(c.execute(
             "SELECT * FROM scholarships ORDER BY CASE WHEN deadline='' OR deadline IS NULL THEN 1 ELSE 0 END, deadline"))
     for r in rows_:
         r["phase"] = phase_of(r)
-    # tracked scholarships always stay visible
-    return [r for r in rows_ if show_closed or r["phase"] != "closed" or r.get("pinned")]
+    if view == "all":
+        return rows_
+    if view == "qualified":  # tracked scholarships always stay visible
+        return [r for r in rows_ if r["verdict"] == "qualified" or r.get("pinned")]
+    return [r for r in rows_ if r["verdict"] == view and not r.get("pinned")]
+
+
+@app.get("/api/scholarships/counts")
+def scholarship_counts():
+    with db.conn() as c:
+        rows_ = {r[0]: r[1] for r in c.execute("SELECT verdict, count(*) FROM scholarships WHERE pinned=0 GROUP BY verdict")}
+        pinned = c.execute("SELECT count(*) FROM scholarships WHERE pinned=1").fetchone()[0]
+    return {"qualified": rows_.get("qualified", 0) + pinned, "review": rows_.get("review", 0),
+            "rejected": rows_.get("rejected", 0), "pending": rows_.get("pending", 0),
+            "verifying": verifier.STATE["running"], "ingesting": sum(v for k, v in jobs.queue_counts().items() if k in ("pending", "processing"))}
+
+
+class BulkIn(BaseModel):
+    ids: list[int]
+    action: str  # track | untrack | skip | delete
+
+
+@app.post("/api/scholarships/bulk")
+def bulk_action(b: BulkIn, bg: BackgroundTasks):
+    ids = [int(i) for i in b.ids][:500]
+    if not ids:
+        return {"changed": 0}
+    q = ",".join("?" * len(ids))
+    need_todos = []
+    with db.conn() as c:
+        if b.action == "track":
+            for r in db.rows(c.execute(f"SELECT * FROM scholarships WHERE id IN ({q})", ids)):
+                steps = sorted(set(r["steps_done"]) | {"shortlist"})
+                c.execute("UPDATE scholarships SET pinned=1, verdict='qualified', verdict_reason='', steps_done=? WHERE id=?",
+                          (json.dumps(steps), r["id"]))
+                if not c.execute("SELECT 1 FROM todos WHERE scholarship_id=?", (r["id"],)).fetchone():
+                    need_todos.append(r["id"])
+        elif b.action == "untrack":
+            c.execute(f"UPDATE scholarships SET pinned=0 WHERE id IN ({q})", ids)
+        elif b.action == "skip":
+            c.execute(f"UPDATE scholarships SET status='skipped', pinned=0, verdict='rejected', "
+                      f"verdict_reason='Skipped by you' WHERE id IN ({q})", ids)
+        elif b.action == "delete":
+            c.execute(f"DELETE FROM scholarships WHERE id IN ({q})", ids)
+        else:
+            raise HTTPException(400, "Unknown action")
+    if need_todos:
+        bg.add_task(inbox.pull_many, need_todos)  # read each official page and build its to-do list
+    return {"changed": len(ids), "pulling_requirements": len(need_todos)}
+
+
+@app.get("/api/stats")
+def stats():
+    """Numbers behind the dashboard visuals."""
+    from datetime import timedelta
+    today_ = date.today()
+    with db.conn() as c:
+        rows_ = db.rows(c.execute("SELECT * FROM scholarships"))
+        todos = [dict(r) for r in c.execute(
+            "SELECT t.done, t.text, t.scholarship_id FROM todos t JOIN scholarships s ON s.id=t.scholarship_id "
+            "WHERE s.pinned=1 AND t.kind='document'")]
+    days = [(today_ - timedelta(days=i)).isoformat() for i in range(13, -1, -1)]
+    per_day = {d: 0 for d in days}
+    for r in rows_:
+        d = (r["created"] or "")[:10]
+        if d in per_day and r["source"] not in ("manual",):
+            per_day[d] += 1
+    qualified = [r for r in rows_ if r["verdict"] == "qualified" or r["pinned"]]
+    by_country = {}
+    for r in qualified:
+        k = (r["country"] or "Other").split(",")[0].strip() or "Other"
+        by_country[k] = by_country.get(k, 0) + 1
+    upcoming = []
+    for r in qualified:
+        try:
+            dl = date.fromisoformat(r["deadline"])
+        except (ValueError, TypeError):
+            continue
+        n = (dl - today_).days
+        if 0 <= n <= 180:
+            upcoming.append({"id": r["id"], "name": r["name"], "days": n, "pinned": bool(r["pinned"])})
+    upcoming.sort(key=lambda x: x["days"])
+    kinds = {t["scholarship_id"] for t in todos}
+    return {
+        "per_day": [{"day": d, "n": per_day[d]} for d in days],
+        "new_week": sum(per_day[d] for d in days[-7:]),
+        "funnel": {"found": len(rows_), "verified": sum(1 for r in rows_ if r["verdict"] not in ("pending", "")),
+                   "qualified": len(qualified), "tracked": sum(1 for r in rows_ if r["pinned"]),
+                   "submitted": sum(1 for r in rows_ if r["status"] in ("submitted", "interview", "waitlisted", "accepted"))},
+        "by_country": sorted(({"country": k, "n": v} for k, v in by_country.items()), key=lambda x: -x["n"])[:6],
+        "upcoming": upcoming[:14],
+        "docs": {"total": len(todos), "ready": sum(1 for t in todos if t["done"]), "scholarships": len(kinds)},
+    }
+
+
+@app.get("/favicon.ico")
+def favicon():
+    return FileResponse(FRONTEND / "favicon.svg", media_type="image/svg+xml")
+
+
+@app.post("/api/dedupe")
+def dedupe_now():
+    return {"merged": merge_duplicates()}
+
+
+@app.post("/api/verify")
+def verify_now():
+    """Re-check everything that is still pending (or reset review/rejected ones with {"all": true})."""
+    verifier.kick()
+    return {"ok": True}
+
+
+@app.post("/api/verify/reset")
+def verify_reset(all: bool = False):
+    """Re-check filtered ones, or with all=true everything that was found automatically (double-check pass)."""
+    with db.conn() as c:
+        if all:
+            c.execute("UPDATE scholarships SET verdict='pending' WHERE source NOT IN ('manual','research') AND pinned=0")
+        else:
+            c.execute("UPDATE scholarships SET verdict='pending' WHERE verdict IN ('review','rejected') AND pinned=0")
+    verifier.kick()
+    return {"ok": True}
 
 
 class ScholarshipIn(BaseModel):
@@ -289,7 +498,8 @@ def add_scholarship(s: ScholarshipIn):
 @app.patch("/api/scholarships/{sid}")
 def patch_scholarship(sid: int, body: dict):
     allowed = {"name", "provider", "country", "level", "field", "funding", "url", "open_date", "deadline",
-               "required_docs", "docs_done", "eligibility", "notes", "status"}
+               "required_docs", "docs_done", "eligibility", "notes", "status", "application_mode",
+               "application_fee"}
     sets, vals = [], []
     for k, v in body.items():
         if k in allowed:
@@ -462,53 +672,110 @@ def reset_seen():
     return {"ok": True}
 
 
-@app.post("/api/linkedin/ingest")
-def linkedin_ingest(body: IngestIn):
-    """For each saved post: skip ones already processed or duplicated, skip non-scholarship posts cheaply,
-    extract scholarships from the rest, and read the external links they contain (aggregator pages are
-    followed to the individual scholarships)."""
-    require_core()
-    st = {"received": len(body.posts), "duplicates": 0, "already_seen": 0, "not_scholarship": 0,
-          "scholarships": 0, "filtered_out": 0, "errors": 0}
-    batch_keys, link_seen = set(), set()
-    with db.conn() as c:
-        n_before = c.execute("SELECT count(*) FROM scholarships").fetchone()[0]
-    for p in body.posts:
-        keys = post_keys(p)
+def process_post(p):
+    """The AI part for one saved post: extract scholarships, follow its links, remember the result."""
+    keys = post_keys(p)
+
+    def mark(verdict):
         with db.conn() as c:
-            known = any(c.execute("SELECT 1 FROM seen_posts WHERE key=?", (k,)).fetchone() for k in keys)
-        if known:
-            st["already_seen"] += 1
-            continue
-        if any(k in batch_keys for k in keys):
-            st["duplicates"] += 1
-            continue
-        batch_keys.update(keys)
+            for k in keys:
+                c.execute("INSERT INTO seen_posts(key,verdict) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET verdict=excluded.verdict", (k, verdict))
 
-        def mark(verdict):
-            with db.conn() as c:
-                for k in keys:
-                    c.execute("INSERT OR IGNORE INTO seen_posts(key,verdict) VALUES(?,?)", (k, verdict))
-
-        if not STRONG.search(p.text + " " + " ".join(p.links)):
-            st["not_scholarship"] += 1
-            mark("not_scholarship")
-            continue
-        try:
-            found = [s_ for s_ in ai.extract_scholarships(f"LinkedIn post by {p.author}:\n{p.text}", today()) if s_.get("name")]
-        except Exception:
-            st["errors"] += 1  # not marked as seen, so a later run retries it
-            continue
+    try:
+        found = [s_ for s_ in ai.extract_scholarships(f"LinkedIn post by {p.author}:\n{p.text}", today()) if s_.get("name")]
         saved = sum(1 for s_ in found if save_scholarship(s_, "linkedin"))
-        st["filtered_out"] += len(found) - saved
-        linked = 0
+        linked, link_seen = 0, set()
         for u in {clean_url(u) for u in p.links + URL_RE.findall(p.text)}:
             if not is_social(u):
                 linked += read_url(u, "linkedin-link", seen=link_seen)
-        mark("scholarship" if (saved or linked) else "nothing_usable")
-    with db.conn() as c:  # genuinely new rows only; updates to ones we already had don't count
-        st["scholarships"] = c.execute("SELECT count(*) FROM scholarships").fetchone()[0] - n_before
+    except Exception:
+        with db.conn() as c:  # forget the 'queued' marker so a later run retries this post
+            for k in keys:
+                c.execute("DELETE FROM seen_posts WHERE key=? AND verdict='queued'", (k,))
+        raise
+    mark("scholarship" if (saved or linked) else "nothing_usable")
+
+
+@app.post("/api/linkedin/ingest")
+def linkedin_ingest(body: IngestIn):
+    """Cheap triage happens here (duplicates, already-seen, non-scholarship keywords); the slow AI work is
+    queued and runs on the server, so the extension never waits and nothing is lost if the browser closes."""
+    require_core()
+    st = {"received": len(body.posts), "duplicates": 0, "already_seen": 0, "not_scholarship": 0, "queued": 0}
+    batch_keys = set()
+    with db.conn() as c:
+        for p in body.posts:
+            keys = post_keys(p)
+            if any(c.execute("SELECT 1 FROM seen_posts WHERE key=?", (k,)).fetchone() for k in keys):
+                st["already_seen"] += 1
+                continue
+            if any(k in batch_keys for k in keys):
+                st["duplicates"] += 1
+                continue
+            batch_keys.update(keys)
+            if not STRONG.search(p.text + " " + " ".join(p.links)):
+                st["not_scholarship"] += 1
+                verdict = "not_scholarship"
+            else:
+                c.execute("INSERT INTO ingest_queue(post) VALUES(?)", (p.model_dump_json(),))
+                st["queued"] += 1
+                verdict = "queued"
+            for k in keys:
+                c.execute("INSERT OR IGNORE INTO seen_posts(key,verdict) VALUES(?,?)", (k, verdict))
+    if st["queued"]:
+        jobs.kick_ingest()
     return st
+
+
+# ---------- notifications, settings and background-job status ----------
+@app.get("/api/notifications")
+def list_notifications():
+    with db.conn() as c:
+        items = [dict(r) for r in c.execute("SELECT * FROM notifications ORDER BY id DESC LIMIT 40")]
+    return {"unread": sum(1 for i in items if not i["read"]), "items": items}
+
+
+@app.post("/api/notifications/read")
+def read_notifications():
+    with db.conn() as c:
+        c.execute("UPDATE notifications SET read=1 WHERE read=0")
+    return {"ok": True}
+
+
+class SettingsIn(BaseModel):
+    notify_email: bool | None = None
+    daily_sweep: bool | None = None
+    sweep_hour_utc: int | None = None
+
+
+@app.get("/api/settings")
+def get_settings():
+    return jobs.settings()
+
+
+@app.put("/api/settings")
+def put_settings(b: SettingsIn):
+    if b.notify_email is not None:
+        jobs.set_setting("notify_email", "1" if b.notify_email else "0")
+    if b.daily_sweep is not None:
+        jobs.set_setting("daily_sweep", "1" if b.daily_sweep else "0")
+    if b.sweep_hour_utc is not None:
+        jobs.set_setting("sweep_hour_utc", max(0, min(23, b.sweep_hour_utc)))
+    return jobs.settings()
+
+
+@app.get("/api/jobs")
+def job_status():
+    return {**jobs.STATE, "queue": jobs.queue_counts(), "verifying": verifier.STATE["running"],
+            "pending_verification": len(verifier.pending_ids(500)), "settings": jobs.settings()}
+
+
+@app.post("/api/sweep/run-now")
+def sweep_now():
+    import threading
+    require_core()
+    threading.Thread(target=jobs.run_daily, daemon=True).start()
+    return {"started": True}
 
 
 # ---------- planner ----------
@@ -777,6 +1044,32 @@ def delete_letter(lid: int):
 app.include_router(auth.router)
 app.include_router(pipeline.router)
 app.include_router(inbox.router)
+
+
+AVATAR_TYPES = {"avif": "image/avif", "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp"}
+
+
+@app.get("/api/avatar")
+def get_avatar():
+    for ext, mt in AVATAR_TYPES.items():
+        p = db.DATA_DIR / f"avatar.{ext}"
+        if p.exists():
+            return FileResponse(p, media_type=mt, headers={"Cache-Control": "private, max-age=300"})
+    raise HTTPException(404, "No profile picture")
+
+
+@app.post("/api/avatar")
+async def set_avatar(file: UploadFile = File(...)):
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower()
+    if ext not in AVATAR_TYPES:
+        raise HTTPException(400, "Use an AVIF, PNG, JPG or WebP image")
+    raw = await file.read()
+    if len(raw) > 5_000_000:
+        raise HTTPException(400, "Image is larger than 5 MB")
+    for e in AVATAR_TYPES:
+        (db.DATA_DIR / f"avatar.{e}").unlink(missing_ok=True)
+    (db.DATA_DIR / f"avatar.{ext}").write_bytes(raw)
+    return {"ok": True}
 
 
 @app.get("/login")

@@ -41,6 +41,20 @@ def seed():
                 inbox.add_todo(c, sid, doc, "document")
             inbox.add_todo(c, sid, "Create an account on the application portal", "step")
             c.execute("UPDATE scholarships SET pinned=1, steps_done='[\"shortlist\"]' WHERE id=?", (sid,))
+    # extra, untracked scholarships so the list, insights and bulk actions have something to show
+    more = [("ETH Zurich Excellence Scholarship (ESOP)", "ETH Zurich", "Switzerland", 47, "online", "Free"),
+            ("KAUST Fellowship", "KAUST", "Saudi Arabia", 75, "online", "USD 60"),
+            ("Eiffel Excellence Scholarship", "Campus France", "France", 88, "both", "Free"),
+            ("Swiss Government Excellence Scholarship", "SERI", "Switzerland", 52, "online", "Free"),
+            ("MEXT University Recommended", "MEXT", "Japan", 33, "offline", "Free"),
+            ("Türkiye Burslari", "YTB", "Turkey", 120, "online", "Free")]
+    for i, (name, provider, country, d, mode, fee) in enumerate(more):
+        sid = main.save_scholarship({"name": name, "provider": provider, "country": country, "level": "Master",
+                                     "deadline": days(d), "open_date": days(-10), "application_mode": mode,
+                                     "application_fee": fee, "required_docs": ["CV", "Transcript"]}, "manual")
+        with db.conn() as c:
+            c.execute("UPDATE scholarships SET source='google-sweep', verdict='qualified', confidence=?, created=? WHERE id=?",
+                      ("confirmed" if i % 2 == 0 else "official", days(-(i * 2 % 12)) + " 09:00:00", sid))
 
 
 if __name__ == "__main__":

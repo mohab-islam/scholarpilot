@@ -55,6 +55,8 @@ SCHOLARSHIP_FIELDS = """{
   "open_date": "YYYY-MM-DD or '' if unknown",
   "deadline": "YYYY-MM-DD or '' if unknown",
   "required_docs": ["every document/step the applicant must submit, one short item each"],
+  "application_mode": "online | offline | both | '' : how the application is submitted (web portal/email = online; post or in person = offline)",
+  "application_fee": "the application fee with currency (e.g. 'EUR 50'), 'Free' if it is stated there is none, '' if not stated",
   "eligibility": "short summary of eligibility rules (nationality, level, field, language, age, etc.)",
   "fit": "yes | likely | unclear | no: can THIS applicant (see APPLICANT) apply, judged on nationality, degree level and field?",
   "fit_reason": "one short reason for the fit value"

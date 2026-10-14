@@ -18,5 +18,7 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Per-machine extension defaults (server URL and token)
 extension/config.local.js
+deploy/
+client_secret*.json
+

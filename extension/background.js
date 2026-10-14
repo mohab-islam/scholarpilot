@@ -1,5 +1,6 @@
 // Runs the whole job in the service worker so it keeps going if the popup is closed.
 let running = false, stopFlag = false;
+const DEFAULT_LIMIT = 50; // only the most recent saved posts are analysed
 try { importScripts("config.local.js"); } catch (e) { /* optional local defaults (server URL and token) */ }
 const LOCAL = (typeof self !== "undefined" && self.SP_CONFIG) || {};
 
@@ -24,13 +25,14 @@ function scrapePosts() {
     const a = el.querySelector('a[href*="/feed/update/"], a[href*="/posts/"], a[href*="activity"]');
     const links = [...el.querySelectorAll("a[href]")].map(x => x.href)
       .filter(h => h.startsWith("http") && (!h.includes("linkedin.com") || h.includes("/safety/go")));
-    cands.push({ url: a ? a.href.split("?")[0] : "", author: "", text, links: [...new Set(links)], n: norm(text) });
+    cands.push({ url: a ? a.href.split("?")[0] : "", author: "", text, links: [...new Set(links)], n: norm(text), idx: cands.length });
   });
   // keep the outermost container of each post: drop elements whose text is contained in a bigger one
   cands.sort((x, y) => y.n.length - x.n.length);
   const kept = [];
   for (const c of cands) if (!kept.some(k => k.n.includes(c.n.slice(0, 200)))) kept.push(c);
-  return kept.map(({ n, ...rest }) => rest);
+  kept.sort((x, y) => x.idx - y.idx); // saved posts are listed newest first
+  return kept.map(({ n, idx, ...rest }) => rest);
 }
 // -------------------------------------------------------------------------------------
 
@@ -63,8 +65,12 @@ async function run(tabId) {
 
     // 1) scroll until nothing new loads
     let same = 0, last = "", iter = 0;
+    const stored = await chrome.storage.local.get("limit");
+    const LIMIT = Math.max(5, Math.min(200, Number(stored.limit) || DEFAULT_LIMIT));
     while (!stopFlag && same < 4 && iter < 250) {
       const [{ result }] = await chrome.scripting.executeScript({ target: { tabId }, func: stepScroll });
+      const [{ result: loaded }] = await chrome.scripting.executeScript({ target: { tabId }, func: () => document.querySelectorAll("a[href*='/feed/update/'], a[href*='activity']").length });
+      if (loaded >= LIMIT * 1.4) break; // enough loaded (links repeat per post), stop scrolling
       const sig = result.h + ":" + result.n;
       same = sig === last ? same + 1 : 0; last = sig; iter++;
       await setStatus({ phase: "scrolling", text: `Scrolling… ${result.n} items loaded (round ${iter})`, pct: Math.min(40, iter / 5) });
@@ -78,12 +84,13 @@ async function run(tabId) {
       if (seen.has(key)) continue;
       seen.add(key); posts.push(p);
     }
+    posts.length = Math.min(posts.length, LIMIT);
     const removed = raw.length - posts.length;
     if (!posts.length) { await setStatus({ phase: "done", text: "No posts found on this page. Open LinkedIn → Saved posts first.", pct: 100 }); return; }
 
     // 3) send in small batches (the server skips non-scholarship posts and ones it already processed)
-    const tot = { received: 0, duplicates: 0, already_seen: 0, not_scholarship: 0, scholarships: 0, filtered_out: 0, errors: 0 };
-    const BATCH = 6;
+    const tot = { received: 0, duplicates: 0, already_seen: 0, not_scholarship: 0, queued: 0 };
+    const BATCH = 40;
     for (let i = 0; i < posts.length; i += BATCH) {
       await setStatus({ phase: "sending", text: `Analysing posts ${i + 1}–${Math.min(i + BATCH, posts.length)} of ${posts.length}…`, pct: 40 + 60 * i / posts.length });
       const r = await fetch(base + "/api/linkedin/ingest", { method: "POST", headers, body: JSON.stringify({ posts: posts.slice(i, i + BATCH) }) });
@@ -94,9 +101,9 @@ async function run(tabId) {
     const dup = removed + tot.duplicates;
     await setStatus({ phase: "done", pct: 100, text:
       `Done. ${posts.length} unique posts (${dup} duplicates removed).\n` +
-      `• ${tot.scholarships} scholarships added\n• ${tot.not_scholarship} posts skipped as not scholarship-related\n` +
-      `• ${tot.already_seen} already processed in an earlier run\n` +
-      `• ${tot.filtered_out} found but not eligible or already closed` + (tot.errors ? `\n• ${tot.errors} errors (will retry next run)` : "") });
+      `• ${tot.queued || 0} queued for analysis on your server (they appear in Scholarships within minutes)\n` +
+      `• ${tot.not_scholarship} skipped as not scholarship-related\n` +
+      `• ${tot.already_seen} already processed in an earlier run` });
   } catch (e) {
     await setStatus({ phase: "error", text: "Error: " + e.message, pct: 100 });
   } finally { running = false; }

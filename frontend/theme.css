@@ -163,3 +163,69 @@ details>summary{cursor:pointer;list-style:none}details>summary::-webkit-details-
 
 .banner::before{content:"";position:absolute;inset:0;border-radius:inherit;background:linear-gradient(180deg,rgba(10,20,14,.35),rgba(10,20,14,.5));z-index:0}
 .banner label,.banner .mute{color:rgba(255,255,255,.85)}
+
+.me .av{position:relative;overflow:hidden}
+.me .av img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+
+.ico-btn .count{position:absolute;top:-3px;right:-3px;min-width:19px;height:19px;padding:0 5px;border-radius:99px;background:var(--bad);color:#fff;font-size:11px;font-weight:700;display:grid;place-items:center}
+.bellpanel{position:fixed;top:78px;right:30px;width:min(380px,92vw);max-height:70vh;overflow:auto;z-index:60;border-radius:22px;padding:14px;
+  background:var(--glass2);backdrop-filter:blur(30px);border:1px solid var(--edge);box-shadow:var(--shadow)}
+.bellpanel .top{margin-bottom:8px}.nitem{padding:10px;border-radius:14px;cursor:pointer}.nitem:hover{background:var(--fill)}
+.nitem.unread{background:color-mix(in srgb,var(--ok) 12%,transparent)}
+
+/* ---------- motion ---------- */
+@keyframes rise{from{opacity:0;transform:translateY(14px) scale(.985)}to{opacity:1;transform:none}}
+@keyframes grow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes pop{0%{transform:scale(.6);opacity:0}70%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
+@keyframes shimmer{from{background-position:-200% 0}to{background-position:200% 0}}
+@keyframes ringin{from{stroke-dashoffset:var(--circ)}}
+@keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+.card,.panel,.tile,.thumb,.li,.hero,.insight{animation:rise .55s cubic-bezier(.2,.8,.2,1) both}
+.tiles .tile:nth-child(2){animation-delay:.05s}.tiles .tile:nth-child(3){animation-delay:.1s}.tiles .tile:nth-child(4){animation-delay:.15s}
+.tiles .tile:nth-child(5){animation-delay:.2s}.tiles .tile:nth-child(6){animation-delay:.25s}
+.insights .insight:nth-child(2){animation-delay:.07s}.insights .insight:nth-child(3){animation-delay:.14s}.insights .insight:nth-child(4){animation-delay:.21s}
+.card,.tile,.thumb,.btn,.pill,.dock button{transition:transform .22s ease,box-shadow .22s ease,background .2s ease}
+.card:hover{box-shadow:0 14px 34px -18px rgba(58,48,30,.35)}
+.tile:hover{transform:translateY(-5px) rotate(-.4deg);box-shadow:0 22px 40px -18px rgba(20,24,60,.6)}
+button.btn:active{transform:translateY(1px) scale(.98)}
+.skeleton{background:linear-gradient(90deg,var(--fill) 25%,rgba(255,255,255,.85) 50%,var(--fill) 75%);background-size:200% 100%;animation:shimmer 1.4s infinite;border-radius:14px;min-height:18px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* ---------- insights ---------- */
+.insights{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px;margin:6px 0 4px}
+.insight{background:var(--fill);border:1px solid var(--line);border-radius:24px;padding:16px 18px;position:relative;overflow:hidden}
+.insight h4{margin:0 0 10px;font-size:13px;font-weight:600;color:var(--mute);letter-spacing:.02em;text-transform:uppercase}
+.insight .big{font-size:38px;font-weight:700;letter-spacing:-.04em;line-height:1}
+.insight svg{display:block;width:100%;height:auto}
+.fbar{display:grid;grid-template-columns:78px 1fr 34px;gap:8px;align-items:center;margin:7px 0;font-size:12.5px}
+.fbar .track{height:10px;background:var(--line);border-radius:10px;overflow:hidden}
+.fbar .track i{display:block;height:100%;border-radius:10px;background:linear-gradient(90deg,#7fa890,var(--btn));transform-origin:left;animation:grow .9s cubic-bezier(.2,.8,.2,1) both}
+.fbar b{text-align:right}
+.ring{display:block;margin:0 auto}.ring .arc{stroke-dasharray:var(--circ);animation:ringin 1.1s cubic-bezier(.2,.8,.2,1) both}
+.tl-dot{animation:pop .5s both}
+.spark path.line{stroke-dasharray:600;stroke-dashoffset:600;animation:dash 1.4s ease forwards}
+@keyframes dash{to{stroke-dashoffset:0}}
+.tile.multi::after{content:"";position:absolute;inset:0;border-radius:inherit;box-shadow:inset 0 0 0 2px rgba(255,255,255,.55);pointer-events:none}
+.needby{display:inline-flex;align-items:center;gap:6px;font-weight:700}
+.needby .n{background:#fff;color:#12141c;border-radius:99px;min-width:26px;height:26px;display:inline-grid;place-items:center;font-size:13px;animation:pop .5s both}
+
+/* ---------- scholarships: selection and bulk bar ---------- */
+.schhead{position:relative}
+.selbox{position:absolute;top:14px;left:14px;z-index:3}
+.selbox input{width:20px;height:20px;accent-color:#fff}
+.schhead .top{padding-left:34px}
+.bulk{display:flex;justify-content:space-between;align-items:center;margin:4px 6px 10px}
+.bulkbar{position:fixed;left:50%;bottom:24px;transform:translate(-50%,120px);z-index:70;display:flex;gap:10px;align-items:center;padding:10px 14px;border-radius:99px;
+  background:var(--glass2);backdrop-filter:blur(26px);border:1px solid var(--edge);box-shadow:var(--shadow);transition:transform .35s cubic-bezier(.2,.8,.2,1)}
+.bulkbar.on{transform:translate(-50%,0)}
+details.more>summary{cursor:pointer;color:var(--acc);font-size:13px;font-weight:500;margin:10px 0;list-style:none}
+details.more>summary::before{content:"▸ "}details.more[open]>summary::before{content:"▾ "}
+
+/* ---------- polish ---------- */
+::selection{background:color-mix(in srgb,var(--btn) 28%,transparent)}
+*{scrollbar-width:thin;scrollbar-color:rgba(80,68,48,.3) transparent}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+a{text-underline-offset:3px}
+
+.insight svg.ring{width:118px;max-width:100%}
+.insight{display:flex;flex-direction:column}

@@ -16,7 +16,7 @@ COOKIE = "sp_session"
 MAX_AGE = 30 * 86400
 SECURE = os.getenv("PUBLIC_URL", "").startswith("https")
 EXT_PATHS = ("/api/linkedin/ingest", "/api/profile/import")  # the only endpoints the Chrome extension may call
-PUBLIC_PATHS = ("/login", "/api/auth/login", "/static/theme.css")
+PUBLIC_PATHS = ("/login", "/api/auth/login", "/static/theme.css", "/static/favicon.svg", "/favicon.ico")
 
 router = APIRouter(prefix="/api/auth")
 _fails = []
@@ -81,7 +81,7 @@ def logout():
 
 
 LOGIN_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ScholarPilot</title><link rel="stylesheet" href="/static/theme.css">
+<title>ScholarPilot</title><link rel="icon" type="image/svg+xml" href="/static/favicon.svg"><link rel="stylesheet" href="/static/theme.css">
 <style>body{display:grid;place-items:center;min-height:100vh}.box{width:min(380px,92vw);padding:34px;border-radius:32px;background:var(--glass);
 backdrop-filter:blur(40px);border:1px solid var(--edge);box-shadow:var(--shadow)}h1{margin:0 0 4px;font-size:26px;letter-spacing:-.03em}button{width:100%;justify-content:center;margin-top:16px}
 #e{color:var(--bad);font-size:13px;min-height:18px;margin-top:8px}</style></head><body>

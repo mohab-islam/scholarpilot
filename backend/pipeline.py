@@ -153,11 +153,11 @@ class SweepIn(BaseModel):
     level: str = ""  # default: the degree level from the profile
 
 
-@router.post("/sweep")
-def sweep(b: SweepIn):
+def run_sweep(level=""):
+    """Parallel web search agents; everything found goes through verification before it is shown."""
     m().require_core()
     p = m().get_profile()
-    queries = agents.sweep_queries(b.level or p.get("target_level", ""), p.get("nationality", ""), p.get("target_field", ""))
+    queries = agents.sweep_queries(level or p.get("target_level", ""), p.get("nationality", ""), p.get("target_field", ""))
     jobs = [(q, lambda q=q: ai.discover(m().profile_summary(), q, today())) for q in queries]
     results = agents.run_parallel(jobs, workers=6)
     added = errors = 0
@@ -165,13 +165,18 @@ def sweep(b: SweepIn):
         if isinstance(res, Exception):
             errors += 1
             continue
-        for s in res:
-            if s.get("name"):
-                if m().save_scholarship(s, "google-sweep"):
-                    added += 1
-    if errors == len(queries):
-        raise HTTPException(502, "AI error: all search agents failed (check Vertex credentials)")
+        for s_ in res:
+            if s_.get("name") and m().save_scholarship(s_, "google-sweep"):
+                added += 1
     return {"found": added, "agents": len(queries), "failed": errors}
+
+
+@router.post("/sweep")
+def sweep(b: SweepIn):
+    res = run_sweep(b.level)
+    if res["failed"] == res["agents"]:
+        raise HTTPException(502, "AI error: all search agents failed (check Vertex credentials)")
+    return res
 
 
 # ---------- pinned applications ----------

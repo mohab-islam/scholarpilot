@@ -66,7 +66,7 @@ function art(seed) {
 // page background: a calm, pale, misty version of the same scene
 document.querySelector('.ambient').style.backgroundImage = `url('data:image/svg+xml,${encodeURIComponent(sceneSVG('scholarpilot-sky', 1600, 1000, true))}')`;
 
-let me = {name: '', pct: 0}, urgent = false;
+let me = {name: '', pct: 0}, urgent = false, unreadN = 0;
 nav = function () {
   const dock = [];
   GROUPS.forEach(([g, ks], i) => { if (i) dock.push('<div class="sep"></div>'); ks.forEach(k => dock.push(`<button class="${k === tab ? 'on' : ''}" data-t="${k}" data-tip="${TABS[k]}">${svg(k)}</button>`)); });
@@ -76,15 +76,30 @@ nav = function () {
   $('#tabs').innerHTML = ks.length > 1 ? ks.map(k => `<button class="${k === tab ? 'on' : ''}" data-t="${k}">${TABS[k]}</button>`).join('') : `<button class="on">${TABS[tab] || 'Setup'}</button>`;
   $('#tabs').onclick = e => { const b = e.target.closest('button'); if (b && b.dataset.t) { tab = b.dataset.t; render(); } };
   const init = (me.name || '?').trim().split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
-  $('#me').innerHTML = `<div class="av">${esc(init)}</div><div><b>${esc(me.name || 'Your profile')}</b><span>${me.pct}% complete</span></div>`;
+  $('#me').innerHTML = `<div class="av"><span>${esc(init)}</span><img src="/api/avatar" alt="" onerror="this.remove()"></div><div><b>${esc(me.name || 'Your profile')}</b><span>${me.pct}% complete</span></div>`;
   $('#me').onclick = () => { tab = 'me'; render(); };
-  $('#bell').innerHTML = '<svg class="i" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg>' + (urgent ? '<span class="dot"></span>' : '');
-  $('#bell').onclick = () => { tab = 'plan'; render(); };
+  $('#bell').innerHTML = '<svg class="i" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg>' + (unreadN ? `<span class="count">${Math.min(unreadN, 99)}</span>` : (urgent ? '<span class="dot"></span>' : ''));
+  $('#bell').onclick = toggleBell;
 };
 $('#gs').addEventListener('keydown', e => { if (e.key === 'Enter') { searchQ = e.target.value.trim(); tab = 'sch'; render(); } });
+async function toggleBell(e) {
+  if (e) e.stopPropagation();
+  const old = document.getElementById('bellpanel');
+  if (old) { old.remove(); return; }
+  const n = await api('/notifications');
+  const el = document.createElement('div'); el.id = 'bellpanel'; el.className = 'bellpanel';
+  el.innerHTML = `<div class="top"><b>Notifications</b>${n.unread ? '<a href="#" id="mr">Mark all read</a>' : ''}</div>` +
+    (n.items.length ? n.items.map(i => `<div class="nitem ${i.read ? '' : 'unread'}" data-n="${esc(i.title.replace(/^New: /, ''))}"><b>${esc(i.title)}</b><div class="mute">${esc(i.body)}</div></div>`).join('') : '<div class="mute" style="padding:10px">Nothing yet. New open scholarships that match your profile appear here.</div>');
+  document.body.appendChild(el);
+  el.querySelectorAll('.nitem').forEach(x => x.onclick = () => { searchQ = x.dataset.n; $('#gs').value = searchQ; schView = 'qualified'; tab = 'sch'; el.remove(); render(); });
+  const mr = el.querySelector('#mr');
+  if (mr) mr.onclick = async ev => { ev.preventDefault(); await api('/notifications/read', {method: 'POST'}); unreadN = 0; el.remove(); nav(); };
+  setTimeout(() => document.addEventListener('click', function h(ev) { if (!el.contains(ev.target)) { el.remove(); document.removeEventListener('click', h); } }), 0);
+}
 async function refreshChrome() {
   try {
-    const [p, st, apps] = await Promise.all([api('/profile'), api('/profile/status'), api('/applications')]);
+    const [p, st, apps, nt] = await Promise.all([api('/profile'), api('/profile/status'), api('/applications'), api('/notifications')]);
+    unreadN = nt.unread;
     me = {name: p.full_name || '', pct: st.percent};
     urgent = apps.some(a => a.days_left !== null && a.days_left >= 0 && a.days_left <= 7);
     nav();
@@ -93,7 +108,7 @@ async function refreshChrome() {
 
 let ticker = null;
 const _renderBase = render;
-render = async function () { clearInterval(ticker); const r = _renderBase(); refreshChrome(); return r; };
+render = async function () { clearInterval(ticker); document.title = 'ScholarPilot · ' + (TABS[tab] || 'Setup'); const r = _renderBase(); refreshChrome(); return r; };
 
 const pad = n => String(n).padStart(2, '0');
 function parts(deadline) {
@@ -104,8 +119,49 @@ function parts(deadline) {
 }
 const chip = (label, cls = '') => `<span class="pill ${cls}">${label}</span>`;
 
+const countUp = root => root.querySelectorAll('[data-to]').forEach(el => {
+  const to = +el.dataset.to, t0 = performance.now();
+  const tick = t => { const k = Math.min(1, (t - t0) / 900); el.textContent = Math.round(to * (1 - Math.pow(1 - k, 3))); if (k < 1) requestAnimationFrame(tick); };
+  requestAnimationFrame(tick);
+});
+
+function insightsHTML(x) {
+  const f = x.funnel, max = Math.max(f.found, 1);
+  const bars = [['Found', f.found], ['Verified', f.verified], ['Eligible', f.qualified], ['Tracked', f.tracked], ['Submitted', f.submitted]]
+    .map(([l, n]) => `<div class="fbar"><span>${l}</span><div class="track"><i style="width:${Math.max(n ? 4 : 0, Math.round(100 * n / max))}%"></i></div><b>${n}</b></div>`).join('');
+  // sparkline of scholarships found per day (14 days)
+  const W = 260, H = 58, pts = x.per_day, top = Math.max(1, ...pts.map(p => p.n));
+  const xy = pts.map((p, i) => [Math.round(i * W / (pts.length - 1)), Math.round(H - 6 - (H - 14) * p.n / top)]);
+  const line = xy.map((q, i) => (i ? 'L' : 'M') + q[0] + ',' + q[1]).join('');
+  const spark = `<svg class="spark" viewBox="0 0 ${W} ${H}"><defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4b7a54" stop-opacity=".35"/><stop offset="1" stop-color="#4b7a54" stop-opacity="0"/></linearGradient></defs>
+    <path d="${line}L${W},${H}L0,${H}Z" fill="url(#sg)"/><path class="line" d="${line}" fill="none" stroke="#3f6b4e" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="${xy[xy.length - 1][0]}" cy="${xy[xy.length - 1][1]}" r="4" fill="#3f6b4e"/></svg>`;
+  // deadline timeline (next 180 days)
+  const TW = 300, TH = 84;
+  const dots = x.upcoming.map((u, i) => {
+    const cx = 10 + (TW - 20) * u.days / 180, cy = 26 + (i % 3) * 18;
+    return `<g class="tl-dot" style="animation-delay:${i * 60}ms"><title>${esc(u.name)} · ${u.days} days</title><circle cx="${cx}" cy="${cy}" r="${u.pinned ? 6 : 5}" fill="${u.pinned ? '#34503d' : 'none'}" stroke="#34503d" stroke-width="2"/></g>`;
+  }).join('');
+  const ticks = [0, 30, 60, 90, 120, 150, 180].map(d => `<g><line x1="${10 + (TW - 20) * d / 180}" x2="${10 + (TW - 20) * d / 180}" y1="6" y2="${TH - 18}" stroke="currentColor" opacity=".12"/><text x="${10 + (TW - 20) * d / 180}" y="${TH - 4}" font-size="9" text-anchor="middle" fill="currentColor" opacity=".55">${d ? d + 'd' : 'today'}</text></g>`).join('');
+  const timeline = `<svg viewBox="0 0 ${TW} ${TH}" style="color:var(--ink)">${ticks}${dots}</svg>`;
+  // documents ring
+  const dd = x.docs, pct = dd.total ? Math.round(100 * dd.ready / dd.total) : 0, r = 38, circ = +(2 * Math.PI * r).toFixed(1);
+  const ring = `<svg class="ring" viewBox="0 0 100 100" width="118" height="118" style="--circ:${circ}"><circle cx="50" cy="50" r="${r}" fill="none" stroke="var(--line)" stroke-width="10"/>
+    <circle class="arc" cx="50" cy="50" r="${r}" fill="none" stroke="var(--btn)" stroke-width="10" stroke-linecap="round" stroke-dashoffset="${(circ * (1 - pct / 100)).toFixed(1)}" transform="rotate(-90 50 50)"/>
+    <text x="50" y="56" text-anchor="middle" font-size="20" font-weight="700" fill="currentColor">${pct}%</text></svg>`;
+  const maxC = Math.max(1, ...x.by_country.map(c => c.n));
+  const countries = x.by_country.length ? x.by_country.map(c => `<div class="fbar"><span title="${esc(c.country)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.country)}</span><div class="track"><i style="width:${Math.round(100 * c.n / maxC)}%"></i></div><b>${c.n}</b></div>`).join('') : '<span class="mute">Appears once scholarships are verified.</span>';
+  return `<div class="insights">
+    <div class="insight"><h4>Pipeline</h4>${bars}</div>
+    <div class="insight"><h4>Found in the last 14 days</h4><div class="big"><span data-to="${x.new_week}">0</span> <span class="mute" style="font-size:14px;font-weight:500">this week</span></div>${spark}</div>
+    <div class="insight"><h4>Deadlines in the next 6 months</h4>${x.upcoming.length ? timeline : '<span class="mute">No deadlines yet.</span>'}<div class="mute">${x.upcoming.length} ahead · filled = tracked</div></div>
+    <div class="insight"><h4>Documents ready</h4>${ring}<div class="mute" style="text-align:center">${dd.total ? `${dd.ready} of ${dd.total} documents across ${dd.scholarships} application${dd.scholarships > 1 ? 's' : ''}` : 'Track a scholarship to see this.'}</div></div>
+    <div class="insight"><h4>Where the opportunities are</h4>${countries}</div>
+  </div>`;
+}
+
 VIEWS.plan = async function () {
-  const d = await api('/dashboard');
+  const [d, stx] = await Promise.all([api('/dashboard'), api('/stats')]);
   const n = d.next;
   const sorted = [...d.apps].filter(a => a.days_left !== null && a.days_left >= 0).sort((x, y) => x.days_left - y.days_left);
   const todosOpen = d.apps.reduce((x, a) => x + (a.todos_open || 0), 0);
@@ -124,7 +180,8 @@ VIEWS.plan = async function () {
       <div class="panel"><h3 class="ph">Closing soon <span class="chipbtn">by deadline</span></h3><div id="soon">${sorted.length ? '' : '<span class="mute">No tracked deadlines yet.</span>'}</div></div>
       <div class="panel"><h3 class="ph">In progress</h3><div id="prog">${d.apps.length ? '' : '<span class="mute">Nothing tracked yet.</span>'}</div></div>
     </aside><section>${hero}
-      <div class="rowhead">Missing papers <span class="chipbtn">${d.missing.length} to prepare</span></div>
+      ${insightsHTML(stx)}
+      <div class="rowhead">Missing papers <span class="chipbtn">${d.missing.length} document types · grouped across applications</span></div>
       <div class="tiles" id="tiles">${d.missing.length ? '' : '<div class="card mute" style="grid-column:1/-1">✅ Nothing missing for your tracked scholarships (or their requirements are still being pulled).</div>'}</div>
       <div class="rowhead">Inbox updates ${d.gmail ? '<a href="#" id="sync" class="chipbtn">Sync Gmail</a>' : '<a href="#" id="cg" class="chipbtn">Connect Gmail</a>'}</div>
       <div class="card" id="ev"></div></section></div>`;
@@ -153,17 +210,18 @@ VIEWS.plan = async function () {
     $('#prog').append(el);
   });
   d.missing.forEach(m => {
-    const el = document.createElement('div'); el.className = 'tile art'; el.style.setProperty('--art', art(m.text));
+    const el = document.createElement('div'); el.className = 'tile art' + (m.for.length > 1 ? ' multi' : ''); el.style.setProperty('--art', art(m.text));
     const soonest = m.for.map(f => f.deadline).filter(Boolean).sort()[0];
-    el.innerHTML = `<div class="top"><span class="pill">${m.for.length} scholarship${m.for.length > 1 ? 's' : ''}</span>${soonest ? `<span class="pill">by ${esc(soonest.slice(5))}</span>` : ''}</div>
+    el.innerHTML = `<div class="top"><span class="needby"><span class="n">${m.for.length}</span> ${m.for.length > 1 ? 'applications need this' : 'application needs this'}</span>${soonest ? `<span class="pill">by ${esc(soonest.slice(5))}</span>` : ''}</div>
       <div><h3>${esc(m.text)}</h3><div class="mute">${m.for.slice(0, 2).map(f => esc(f.name)).join(', ')}${m.for.length > 2 ? ' +' + (m.for.length - 2) : ''}</div>
       <div class="acts" style="margin-top:10px"><button class="btn" data-up>Upload</button><button class="btn" data-ok style="background:rgba(255,255,255,.2);color:#fff">Mark ready</button></div></div>`;
     el.querySelector('[data-up]').onclick = () => { tab = 'me'; render(); };
-    el.querySelector('[data-ok]').onclick = async () => { await Promise.all(m.for.map(f => api('/todos/' + f.todo_id, {method: 'PATCH', body: {done: true}}))); render(); };
+    el.querySelector('[data-ok]').onclick = async () => { await Promise.all((m.todo_ids || m.for.map(f => f.todo_id)).map(i => api('/todos/' + i, {method: 'PATCH', body: {done: true}}))); render(); };
     $('#tiles').append(el);
   });
   $('#ev').innerHTML = d.events.length ? d.events.map(e => `<div class="miss"><b>${esc(e.sname || 'Professor')}</b> ${chip(esc(e.kind.replace('_', ' ')), e.kind === 'acceptance' ? 'ok' : e.kind === 'rejection' ? 'bad' : '')}<div class="mute">${esc(e.summary)}</div></div>`).join('')
     : `<span class="mute">${d.gmail ? 'No status-changing emails found yet.' : 'Connect Gmail to update statuses automatically from university emails.'}</span>`;
+  countUp(document);
   const sy = $('#sync'); if (sy) sy.onclick = ev => { ev.preventDefault(); busy(ev.target, 'Reading mail…', async () => { const r = await api('/gmail/sync', {method: 'POST'}); toast(`${r.relevant} relevant emails, ${r.updates.length} updates`); render(); }); };
   const cg = $('#cg'); if (cg) cg.onclick = ev => { ev.preventDefault(); tab = 'mail'; render(); };
 };
@@ -177,7 +235,8 @@ VIEWS.app = async function () {
   const sec = (k, title, body) => `<div class="card"><h2><span class="st ${done(k) ? 'on' : ''}"></span>${title}</h2>${body}</div>`;
   const todoRow = x => `<label class="chk"><input type="checkbox" data-todo="${x.id}" ${x.done || x.covered ? 'checked' : ''} ${x.covered ? 'disabled' : ''}> <span>${esc(x.text)}${x.covered ? ' <span class="pill ok">covered by your uploaded file</span>' : ''}${x.source === 'email' ? ' <span class="pill warn">requested by email</span>' : ''}</span>${x.detail ? `<span class="mute"> — ${esc(x.detail)}</span>` : ''} <a href="#" data-tdel="${x.id}" class="mute">✕</a></label>`;
   const docs = w.todos.filter(x => x.kind === 'document'), steps = w.todos.filter(x => x.kind !== 'document');
-  $('#main').innerHTML = `<div class="card banner art" style="--art:${art(s.name)};padding:24px 28px"><div class="top"><div><h2 style="font-size:26px;letter-spacing:-.03em">${esc(s.name)}</h2><span class="mute">${esc(s.provider)} · ${esc(s.country)} · ${esc(s.level)}</span></div>${chip(t, c)}</div>
+  $('#main').innerHTML = `<div class="card banner art" style="--art:${art(s.name)};padding:24px 28px"><div class="top"><div><h2 style="font-size:26px;letter-spacing:-.03em">${esc(s.name)}</h2><span class="mute">${esc(s.provider)} · ${esc(s.country)} · ${esc(s.level)}</span>
+      <div style="margin-top:6px">${s.application_mode ? chip(esc(s.application_mode) + ' application') : ''}${s.application_fee ? chip('fee: ' + esc(s.application_fee)) : ''}</div></div>${chip(t, c)}</div>
     ${timeline(v.steps)}<div class="bar"><i style="width:${v.progress}%"></i></div>
     <div class="row" style="margin-top:8px"><div><label>Status</label><select id="st">${['new', 'interested', 'preparing', 'submitted', 'interview', 'waitlisted', 'accepted', 'rejected', 'skipped'].map(o => `<option ${o === s.status ? 'selected' : ''}>${o}</option>`).join('')}</select></div>
     <div><label>Deadline</label><div>${esc(s.deadline || '?')} ${s.url ? `· <a href="${esc(s.url)}" target="_blank" rel="noopener">Official page</a>` : ''}</div></div></div></div>
@@ -253,3 +312,26 @@ VIEWS.mail = async function () {
 
 { const h = location.hash.slice(1).split('/'); if (TABS[h[0]]) { tab = h[0]; if (h[1]) appId = +h[1]; } }
 render();
+
+setInterval(refreshChrome, 60000);
+
+// Inbox page: automation settings (daily sweep, email summary) and background job status
+const _mailView = VIEWS.mail;
+VIEWS.mail = async function () {
+  await _mailView();
+  const [st, jb] = await Promise.all([api('/settings'), api('/jobs')]);
+  const q = jb.queue || {};
+  const el = document.createElement('div'); el.className = 'card';
+  el.innerHTML = `<h2>Automation</h2>
+    <label class="chk"><input type="checkbox" id="a_sw" ${st.daily_sweep ? 'checked' : ''}> Search the internet for new scholarships every day</label>
+    <div class="row" style="margin:6px 0"><div><label>Daily sweep time (UTC hour; Cairo is UTC+3)</label><input type="number" min="0" max="23" id="a_hr" value="${st.sweep_hour_utc}"></div></div>
+    <label class="chk"><input type="checkbox" id="a_em" ${st.notify_email ? 'checked' : ''}> Email me a summary when new scholarships are added (sent to your own Gmail only)</label>
+    <p class="mute">Only open or upcoming scholarships you are eligible for are counted. In-app notifications always appear under the bell.</p>
+    <button class="btn sm" id="a_run">Run the sweep now</button>
+    <p class="mute">Last sweep: ${esc(jb.last_sweep || 'never')} ${jb.last_sweep_result ? '· ' + esc(jb.last_sweep_result) : ''}${jb.sweep_running ? ' · running…' : ''}<br>
+    LinkedIn posts waiting for analysis: ${(q.pending || 0) + (q.processing || 0)} · scholarships being verified: ${jb.pending_verification}${jb.error ? '<br>Last error: ' + esc(jb.error) : ''}</p>`;
+  $('#main').append(el);
+  const save = () => api('/settings', {method: 'PUT', body: {daily_sweep: $('#a_sw').checked, notify_email: $('#a_em').checked, sweep_hour_utc: +$('#a_hr').value}});
+  ['#a_sw', '#a_em', '#a_hr'].forEach(i => $(i).onchange = async () => { await save(); toast('Saved'); });
+  $('#a_run').onclick = e => busy(e.target, 'Starting…', async () => { await api('/sweep/run-now', {method: 'POST'}); toast('Sweep started. New scholarships appear after verification.'); render(); });
+};

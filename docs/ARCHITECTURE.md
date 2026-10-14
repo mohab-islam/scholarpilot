@@ -31,6 +31,8 @@ flowchart TB
 | `backend/main.py` | App wiring, profile, scholarship CRUD and filtering, LinkedIn ingest (dedupe, keyword prefilter), letters with version history, humanize/authenticity tools |
 | `backend/pipeline.py` | Letter-formula research (playbook), templates, parallel discovery sweep, pinned applications and their step timeline, university/professor research, cold-email drafts |
 | `backend/inbox.py` | Gmail OAuth (desktop and web flows), drafts/send, mail sync that classifies emails and updates statuses, per-scholarship to-do lists pulled from official pages, dashboard aggregation, background watcher |
+| `backend/jobs.py` | Background workers: LinkedIn ingest queue (server-side, survives browser close), daily internet sweep scheduler, notifications and the email summary |
+| `backend/verifier.py` | Verification worker: web research, then a second read of the official page; reconciles dates, applies the open/eligible rules, notifies |
 | `backend/agents.py` | Google-grounded search helper, parallel runner, prompts for research agents |
 | `backend/ai.py` | Gemini client (Vertex AI), JSON extraction prompts, authenticity heuristics |
 | `backend/auth.py` | Optional single-user login, signed session cookie, extension token |
@@ -55,6 +57,15 @@ Schema changes are applied by `db.init()` (`CREATE IF NOT EXISTS` + additive col
 **Email-driven status.** The watcher (or *Sync now*) lists recent Gmail messages, keeps only those that mention tracked scholarships or professors, and asks the model to classify them (acceptance, rejection, interview, documents requested, professor reply, …). Statuses only move forward.
 
 **Writing.** The motivation-letter prompt combines your profile and documents, the researched playbook, an optional template, the university research, and your answers to generated interview questions. Every change is a new version, with word-level diffs and restore.
+
+## Verification and filtering
+
+Everything found automatically starts as `pending`. The verifier researches it (Google-grounded), reads the official page independently and reconciles the two: if the dates agree it is `confirmed`; if they differ the official page wins. It then decides:
+
+- `qualified`: open or upcoming, matches your degree level, not rated "not eligible". LinkedIn finds must be open now.
+- `review`: dates could not be found. `rejected`: closed, wrong level or not eligible, with a reason.
+
+Rejected records are kept (hidden) so the same scholarship is not re-added by the next sweep. Duplicates from different sources are merged by URL, normalised name and token similarity.
 
 ## Design choices
 

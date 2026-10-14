@@ -320,7 +320,8 @@ REQ_PROMPT = """Today is {today}. Extract EVERYTHING an applicant must do to app
 Use the official page content and/or Google Search results. Return ONLY JSON:
 {{"documents": [{{"text": "short document name, e.g. 'Passport copy'", "detail": "format/length/limits if stated"}}],
  "steps": [{{"text": "action, e.g. 'Create account on the application portal'", "detail": ""}}],
- "open_date": "YYYY-MM-DD or ''", "deadline": "YYYY-MM-DD or ''"}}
+ "open_date": "YYYY-MM-DD or ''", "deadline": "YYYY-MM-DD or ''",
+ "application_mode": "online | offline | both | ''", "application_fee": "amount and currency, 'Free', or ''"}}
 Include every document (transcripts, CV, letters, references, language tests, essays, portfolio, ID, photos, fees...)
 and every step (portal registration, form, upload, fee payment, interview booking, submission). Never invent items.
 {page}"""
@@ -352,9 +353,12 @@ def pull_requirements(sid):
             added += add_todo(c, sid, st.get("text"), "step", "auto", st.get("detail", ""))
         c.execute("UPDATE scholarships SET required_docs=? WHERE id=?",
                   (json.dumps([d.get("text") for d in res.get("documents") or [] if d.get("text")]), sid))
-        for k in ("open_date", "deadline"):
-            if res.get(k) and not s[k]:
+        for k in ("open_date", "deadline", "application_mode", "application_fee"):
+            if res.get(k) and not s.get(k):
                 c.execute(f"UPDATE scholarships SET {k}=? WHERE id=?", (res[k], sid))
+        fee = (res.get("application_fee") or "").strip()
+        if fee and fee.lower() not in ("free", "none", "no fee", "n/a", "0"):
+            added += add_todo(c, sid, f"Pay the application fee ({fee})", "step", "auto")
     return added
 
 
@@ -363,6 +367,11 @@ def pull_safely(sid):
         pull_requirements(sid)
     except Exception:
         pass
+
+
+def pull_many(ids):
+    for i in ids:
+        pull_safely(i)
 
 
 @router.post("/scholarships/{sid}/requirements")
@@ -399,6 +408,32 @@ def delete_todo(tid: int):
     with db.conn() as c:
         c.execute("DELETE FROM todos WHERE id=?", (tid,))
     return {"ok": True}
+
+
+# ---- one canonical name per kind of document, so "CV", "Resume" and "Curriculum Vitae" group together ----
+DOC_RULES = [
+    (("curriculum vitae", "resume", "résumé", " cv", "cv "), "CV / Resume"),
+    (("transcript", "academic record", "grade report", "mark sheet", "marksheet"), "Academic transcripts"),
+    (("passport", "national id", "identity document", "id card", "identity card"), "Passport / ID copy"),
+    (("ielts", "toefl", "english proficiency", "english language", "language certificate", "language test", "duolingo", "pte"), "English language certificate"),
+    (("recommendation", "reference letter", "referee", "references", "letters of reference"), "Recommendation letters"),
+    (("motivation", "statement of purpose", "personal statement", "cover letter", "letter of intent", "study plan", "essay", "sop"), "Motivation letter / statement"),
+    (("degree certificate", "diploma", "bachelor certificate", "graduation certificate", "degree"), "Degree certificate"),
+    (("research proposal", "research plan", "thesis proposal"), "Research proposal"),
+    (("photo",), "Passport photo"),
+    (("portfolio",), "Portfolio"),
+    (("birth certificate",), "Birth certificate"),
+    (("medical", "health certificate"), "Medical certificate"),
+    (("bank statement", "proof of fund", "financial"), "Proof of finances"),
+]
+
+
+def doc_label(text):
+    t = f" {(text or '').lower().strip()} "
+    for words, label in DOC_RULES:
+        if any(w in t for w in words):
+            return label
+    return (text or "").strip()
 
 
 # ---- covering documents from what the user already uploaded ----
@@ -446,9 +481,12 @@ def dashboard():
         a = names.get(t["scholarship_id"])
         if not a or t["kind"] != "document" or t["done"] or t["covered"]:
             continue
-        key = t["text"].strip().lower()
-        e = missing.setdefault(key, {"text": t["text"], "for": []})
-        e["for"].append({"id": a["id"], "name": a["name"], "deadline": a["deadline"], "todo_id": t["id"]})
+        label = doc_label(t["text"])
+        e = missing.setdefault(label.lower(), {"text": label, "for": [], "variants": set()})
+        e["variants"].add(t["text"].strip())
+        if not any(f["id"] == a["id"] for f in e["for"]):  # one entry per scholarship, however it words the document
+            e["for"].append({"id": a["id"], "name": a["name"], "deadline": a["deadline"], "todo_id": t["id"]})
+        e.setdefault("todo_ids", []).append(t["id"])
     for a in apps:
         mine = by_s.get(a["id"], [])
         a["todos_total"] = len(mine)
@@ -460,7 +498,12 @@ def dashboard():
         events = [dict(r) for r in c.execute(
             "SELECT e.*, s.name sname FROM mail_events e LEFT JOIN scholarships s ON s.id=e.scholarship_id "
             "WHERE e.kind NOT IN ('unrelated','info') ORDER BY e.rowid DESC LIMIT 8")]
-    return {"next": nxt, "apps": apps, "missing": sorted(missing.values(), key=lambda e: -len(e["for"])),
+    for e in missing.values():
+        e["variants"] = sorted(e["variants"])
+        e["count"] = len(e["for"])
+        e["soonest"] = min((f["deadline"] for f in e["for"] if f["deadline"]), default="")
+    return {"next": nxt, "apps": apps,
+            "missing": sorted(missing.values(), key=lambda e: (-e["count"], e["soonest"] or "9999")),
             "events": events, "gmail": gmail_status()["connected"]}
 
 
