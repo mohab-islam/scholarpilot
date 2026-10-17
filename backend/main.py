@@ -1,6 +1,7 @@
 import difflib
 from contextlib import asynccontextmanager
 import hashlib
+import unicodedata
 import os
 import io
 import json
@@ -219,22 +220,135 @@ def admissible(s):
     return True
 
 
+def fold(text):
+    """Lower-case and strip accents ('Sabancı' -> 'sabanci', 'Spärck' -> 'sparck')."""
+    text = (text or "").replace("\u0131", "i").replace("\u0130", "I")
+    return "".join(ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch)).lower()
+
+
 NAME_NOISE = re.compile(r"\b(?:19|20)\d{2}(?:[/-]\d{2,4})?\b|\b(?:scholarships?|fellowships?|programmes?|programs?|awards?|for|the|and|in|of|international|students?|masters?|master's|phd|fully|funded)\b")
 
 
 def norm_name(n):
-    short = re.sub(r"[^a-z0-9]+", "", NAME_NOISE.sub("", (n or "").lower()))
-    return short or re.sub(r"[^a-z0-9]+", "", (n or "").lower())
+    f = fold(n)
+    short = re.sub(r"[^a-z0-9]+", "", NAME_NOISE.sub("", f))
+    return short or re.sub(r"[^a-z0-9]+", "", f)
 
 
 NAME_STOP = {"scholarship", "scholarships", "fellowship", "fellowships", "programme", "programmes", "program", "programs",
              "award", "awards", "for", "the", "and", "in", "of", "international", "students", "student", "fully", "funded",
-             "master", "masters", "master's", "phd", "degree", "full", "joint", "study", "studies", "to", "at", "a"}
+             "master", "masters", "master's", "phd", "degree", "full", "joint", "study", "studies", "to", "at", "a", "on",
+             "with", "bin", "de", "du", "van", "von", "al"}
+# words that describe a kind of award rather than identify one
+GENERIC = {"graduate", "postgraduate", "undergraduate", "research", "taught", "excellence", "merit", "based", "global",
+           "foreign", "government", "university", "universite", "universitat", "institute", "school", "college",
+           "department", "ministry", "fund", "grant", "grants", "support", "general", "national", "open", "call",
+           "applications", "new", "cycle", "intake", "mathematics", "technology", "science", "sciences"}
+
+
+def tokens_of(text):
+    t = re.sub(r"\b(?:19|20)\d{2}(?:[/-]\d{2,4})?\b", " ", fold(text))
+    return re.findall(r"[a-z0-9]+", t)
 
 
 def name_tokens(n):
-    n = re.sub(r"\b(?:19|20)\d{2}(?:[/-]\d{2,4})?\b", " ", (n or "").lower())
-    return {t for t in re.findall(r"[a-z0-9]+", n) if t not in NAME_STOP and len(t) > 1}
+    return {w for w in tokens_of(n) if w not in NAME_STOP and w not in GENERIC and len(w) > 1}
+
+
+def aliases(row):
+    """Acronyms a record is known by: '(MBZUAI)' in a title, or the initials of the provider's full name."""
+    out = set()
+    for field in ("name", "provider"):
+        txt = row.get(field) or ""
+        for m in re.findall(r"\(([A-Za-z0-9&/-]{2,12})\)", txt):
+            out.add(fold(m).replace("-", "").replace("/", ""))
+        words = [w for w in tokens_of(txt) if w not in ("of", "the", "and", "for", "de", "du")]
+        if field == "provider" and len(words) >= 3:  # initials of a provider's full name only (not of a title)
+            for skip in (set(), {"bin"}):
+                ini = "".join(w[0] for w in words if w not in skip)
+                if 3 <= len(ini) <= 8:
+                    out.add(ini)
+    return out
+
+
+def identity_tokens(row):
+    return name_tokens(row.get("name")) | {a for a in aliases(row) if len(a) >= 3}
+
+
+SHORTENERS = ("lnkd.in", "bit.ly", "t.co", "tinyurl.com", "ow.ly", "buff.ly", "rebrand.ly", "shorturl.at", "cutt.ly")
+
+
+def is_short_link(url):
+    host = urlparse(url or "").netloc.lower().split(":")[0]
+    return any(host == h or host.endswith("." + h) for h in SHORTENERS)
+
+
+def resolve_url(url, depth=0):
+    """Follow link shorteners (LinkedIn's lnkd.in shows an interstitial) to the real page."""
+    if not url or depth > 3 or not is_short_link(url):
+        return url
+    try:
+        r = httpx.get(url, follow_redirects=False, timeout=15, headers={"User-Agent": "Mozilla/5.0 ScholarPilot"})
+        loc = r.headers.get("location", "")
+        if loc.startswith("http"):
+            return resolve_url(loc, depth + 1)
+        for a in BeautifulSoup(r.text, "html.parser").find_all("a", href=True):
+            h = a["href"]
+            if h.startswith("http") and "linkedin.com" not in h and not is_short_link(h):
+                return h.split("#")[0]
+    except Exception:
+        pass
+    return url
+
+
+MONTHS = {m: i for i, m in enumerate(["january", "february", "march", "april", "may", "june", "july", "august",
+                                      "september", "october", "november", "december"], 1)}
+MONTH_RE = "|".join(sorted(list(MONTHS) + [m[:3] for m in MONTHS] + ["sept"], key=len, reverse=True))
+
+
+def normalize_date(text):
+    """Turn whatever a page or model returned into 'YYYY-MM-DD' or ''.
+    Exact dates pass through; '2027-01' or 'December 2026' become the last day of that month; for ranges
+    ('Dec 2026 - Feb 2027') the latest date is used. Text with no recognisable date becomes ''."""
+    t = fold(text).strip()
+    if not t:
+        return ""
+    from calendar import monthrange
+    found = []
+    for m in re.finditer(r"(\d{4})-(\d{2})-(\d{2})", t):
+        found.append((int(m[1]), int(m[2]), int(m[3])))
+    t2 = re.sub(r"\d{4}-\d{2}-\d{2}", " ", t)
+    for m in re.finditer(r"(\d{4})-(\d{2})(?!\d)", t2):
+        found.append((int(m[1]), int(m[2]), None))
+    for m in re.finditer(rf"(?:(\d{{1,2}})(?:st|nd|rd|th)?\s+)?\b({MONTH_RE})[a-z]*\.?,?\s*(?:(\d{{1,2}})(?:st|nd|rd|th)?,?\s*)?(\d{{4}})", t2):
+        mon = MONTHS.get(m[2]) or next((v for k, v in MONTHS.items() if k.startswith(m[2][:3])), None)
+        if mon:
+            found.append((int(m[4]), mon, int(m[1] or m[3]) if (m[1] or m[3]) else None))
+    out = []
+    for y, mo, d in found:
+        if not (1 <= mo <= 12 and 2000 <= y <= 2100):
+            continue
+        last = monthrange(y, mo)[1]
+        out.append((y, mo, min(d, last) if d else last))
+    if not out:
+        return ""
+    y, mo, d = max(out)
+    return f"{y:04d}-{mo:02d}-{d:02d}"
+
+
+def norm_mode(v):
+    t = fold(v)
+    on, off = "online" in t or "web" in t or "portal" in t, "offline" in t or "post" in t or "in person" in t or "paper" in t
+    return "both" if (on and off) or "both" in t else "online" if on else "offline" if off else ""
+
+
+def norm_fee(v):
+    t = (v or "").strip().strip("'\"").strip()
+    if fold(t) in ("", "not stated", "n/a", "na", "unknown", "varies", "none stated", "not specified", "-"):
+        return ""
+    if fold(t) in ("free", "no fee", "none", "no application fee", "0", "nil"):
+        return "Free"
+    return t[:60]
 
 
 def canon_url(u):
@@ -244,60 +358,123 @@ def canon_url(u):
 
 
 def same_scholarship(a, b):
-    """True when two records describe the same programme (same page, same name, or near-identical name)."""
+    """Confident duplicate test (same page, same normalised name, or near-identical identifying words).
+    Looser cases are settled by adjudicate_duplicates() during the background pass."""
     ua, ub = canon_url(a.get("url")), canon_url(b.get("url"))
     if ua and ua == ub and "/" in ua:  # same page (a bare home page alone does not prove it is the same programme)
         return True
     if norm_name(a.get("name")) and norm_name(a.get("name")) == norm_name(b.get("name")):
         return True
-    ta, tb = name_tokens(a.get("name")), name_tokens(b.get("name"))
+    ta, tb = identity_tokens(a), identity_tokens(b)
     if not ta or not tb:
         return False
-    pa, pb = (a.get("provider") or "").lower().strip(), (b.get("provider") or "").lower().strip()
-    provider_ok = not pa or not pb or pa in pb or pb in pa
-    inter = len(ta & tb)
-    jaccard = inter / len(ta | tb)
-    subset = (ta <= tb or tb <= ta) and min(len(ta), len(tb)) >= 2
-    return provider_ok and (jaccard >= 0.75 or subset)
+    pa, pb = fold(a.get("provider")).strip(), fold(b.get("provider")).strip()
+    provider_ok = not pa or not pb or pa in pb or pb in pa or bool(identity_tokens({"name": pa}) & identity_tokens({"name": pb}))
+    return provider_ok and len(ta & tb) / len(ta | tb) >= 0.75
 
 
-def merge_duplicates():
-    """Collapse records that describe the same scholarship (from LinkedIn, sweeps, manual adds) into one."""
+def related(a, b):
+    """Could these be the same programme? (shares an identifying word); used to build clusters for adjudication."""
+    shared = identity_tokens(a) & identity_tokens(b)
+    return any(len(t) >= 4 for t in shared)
+
+
+def adjudicate_duplicates(cluster):
+    """Ask the model which records in a small cluster are the SAME scholarship. Returns lists of ids."""
+    listing = "\n".join(f'{r["id"]} | {r["name"]} | {r["provider"]} | {r["country"]} | {r["level"]} | deadline {r["deadline"] or "?"} | {r["url"] or ""}'
+                        for r in cluster)
+    prompt = f"""These are scholarship records collected from several sources. Group the records that are the SAME scholarship
+(same funder and same award), even when they are titled differently, abbreviated, or written with different details.
+Do NOT merge:
+- a general umbrella scheme and a specific named programme under it (e.g. "Erasmus Mundus" vs one specific Erasmus Mundus master);
+- the same scheme name run by different universities;
+- different tracks or intakes with different deadlines.
+Records (id | name | provider | country | level | deadline | url):
+{listing}
+
+Return ONLY JSON: {{"groups": [[id, id], ...]}} listing only groups of 2 or more ids that are the same scholarship."""
+    res = ai.parse_json(ai.generate(prompt, temperature=0.0))
+    groups = res.get("groups", res) if isinstance(res, dict) else res
+    ids = {r["id"] for r in cluster}
+    return [[int(i) for i in g if int(i) in ids] for g in groups if isinstance(g, list) and len([i for i in g if int(i) in ids]) >= 2]
+
+
+def merge_duplicates(use_llm=False):
+    """Collapse records that describe the same scholarship (LinkedIn, sweeps, manual adds) into one.
+    Confident matches merge automatically; with use_llm=True, records sharing a rare identifying word are
+    compared by the model once each. Model calls happen outside any database transaction."""
     with db.conn() as c:
         rows = db.rows(c.execute("SELECT * FROM scholarships"))
-        parent = {r["id"]: r["id"] for r in rows}
+    by_id = {r["id"]: r for r in rows}
+    parent = {r["id"]: r["id"] for r in rows}
 
-        def find(x):
-            while parent[x] != x:
-                parent[x] = parent[parent[x]]
-                x = parent[x]
-            return x
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
 
-        for i, a in enumerate(rows):
-            for b in rows[i + 1:]:
-                if find(a["id"]) != find(b["id"]) and same_scholarship(a, b):
-                    parent[find(b["id"])] = find(a["id"])
-        groups = {}
+    def union(x, y):
+        parent[find(y)] = find(x)
+
+    for i, a in enumerate(rows):
+        for b in rows[i + 1:]:
+            if find(a["id"]) != find(b["id"]) and same_scholarship(a, b):
+                union(a["id"], b["id"])
+    if use_llm:
+        by_token = {}
         for r in rows:
-            groups.setdefault(find(r["id"]), []).append(r)
-        merged = 0
+            for t in identity_tokens(r):
+                if len(t) >= 4:
+                    by_token.setdefault(t, set()).add(r["id"])
+        seen_sets, batches = set(), []
+        for t, members in sorted(by_token.items(), key=lambda kv: len(kv[1])):
+            fs = frozenset(members)
+            if 2 <= len(fs) <= 12 and fs not in seen_sets and len({find(i) for i in fs}) > 1:
+                seen_sets.add(fs)
+                batches.append(sorted(fs))
+        for ids_ in batches[:15]:
+            cl = [by_id[i] for i in ids_]
+            sig = hashlib.sha1("|".join(f"{r['id']}:{fold(r['name'])}" for r in cl).encode()).hexdigest()
+            with db.conn() as c:
+                if c.execute("SELECT 1 FROM dedupe_checked WHERE sig=?", (sig,)).fetchone():
+                    continue
+            try:
+                groups_ = adjudicate_duplicates(cl)  # slow: no database connection is held while waiting
+            except Exception:
+                continue  # try again next round
+            for g in groups_:
+                for other in g[1:]:
+                    union(g[0], other)
+            with db.conn() as c:
+                c.execute("INSERT OR IGNORE INTO dedupe_checked(sig) VALUES(?)", (sig,))
+    groups = {}
+    for r in rows:
+        groups.setdefault(find(r["id"]), []).append(by_id[r["id"]])
+    merged = 0
+    with db.conn() as c:
         for g in (g for g in groups.values() if len(g) > 1):
             def richness(r):
                 return (bool(r["pinned"]), r["source"] == "manual", bool(r["deadline"]), len(r["required_docs"]),
-                        bool(r["url"]), -r["id"])
+                        bool(r["url"]) and not is_short_link(r["url"]), -r["id"])
             keeper, *others = sorted(g, key=richness, reverse=True)
             for o in others:
                 for col in ("provider", "country", "level", "field", "funding", "url", "open_date", "deadline",
                             "eligibility", "fit", "fit_reason", "application_mode", "application_fee", "confidence"):
-                    if not keeper[col] and o[col]:
-                        c.execute(f"UPDATE scholarships SET {col}=? WHERE id=?", (o[col], keeper["id"]))
-                        keeper[col] = o[col]
+                    if (not keeper[col] or (col == "url" and is_short_link(keeper[col]))) and o[col] and not (col == "url" and is_short_link(o[col]) and keeper[col]):
+                        try:
+                            c.execute(f"UPDATE scholarships SET {col}=? WHERE id=?", (o[col], keeper["id"]))
+                            keeper[col] = o[col]
+                        except Exception:
+                            pass  # unique URL already used elsewhere
                 docs = list(dict.fromkeys(keeper["required_docs"] + o["required_docs"]))
                 c.execute("UPDATE scholarships SET required_docs=? WHERE id=?", (json.dumps(docs), keeper["id"]))
                 keeper["required_docs"] = docs
                 if o["verdict"] == "qualified" and keeper["verdict"] != "qualified":
                     c.execute("UPDATE scholarships SET verdict='qualified', verdict_reason='' WHERE id=?", (keeper["id"],))
                     keeper["verdict"] = "qualified"
+                if o["pinned"] and not keeper["pinned"]:
+                    c.execute("UPDATE scholarships SET pinned=1 WHERE id=?", (keeper["id"],))
                 for table in ("todos", "professors", "letters"):
                     c.execute(f"UPDATE {table} SET scholarship_id=? WHERE scholarship_id=?", (keeper["id"], o["id"]))
                 c.execute("UPDATE notifications SET ref_id=? WHERE ref_id=?", (keeper["id"], o["id"]))
@@ -327,6 +504,10 @@ def save_scholarship(s, source):
         vals = {k: s.get(k) or "" for k in
                 ("name", "provider", "country", "level", "field", "funding", "open_date", "deadline", "eligibility",
                  "fit", "fit_reason", "application_mode", "application_fee")}
+        vals["deadline"], vals["open_date"] = normalize_date(vals["deadline"]), normalize_date(vals["open_date"])
+        vals["application_mode"], vals["application_fee"] = norm_mode(vals["application_mode"]), norm_fee(vals["application_fee"])
+        if url and is_short_link(url):
+            url = resolve_url(url) or url
         docs = json.dumps([d for d in (s.get("required_docs") or []) if isinstance(d, str)])
         if existing:
             sets = ", ".join(f"{k}=?" for k in vals if vals[k])
@@ -457,9 +638,81 @@ def favicon():
     return FileResponse(FRONTEND / "favicon.svg", media_type="image/svg+xml")
 
 
+def run_audit(fix=False):
+    """Consistency check of everything collected. With fix=True the safe problems are repaired."""
+    today_ = date.today().isoformat()
+    issues, fixed = [], 0
+    with db.conn() as c:
+        rows = db.rows(c.execute("SELECT * FROM scholarships"))
+        ids = {r["id"] for r in rows}
+        for r in rows:
+            for col in ("deadline", "open_date"):
+                v = r[col]
+                if v and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+                    iso = normalize_date(v)
+                    issues.append({"id": r["id"], "kind": "date_format", "detail": f"{col}={v[:40]!r} -> {iso or 'unknown'}"})
+                    if fix:
+                        c.execute(f"UPDATE scholarships SET {col}=? WHERE id=?", (iso, r["id"]))
+                        fixed += 1
+            for col, fn in (("application_mode", norm_mode), ("application_fee", norm_fee)):
+                if r[col] != fn(r[col]):
+                    issues.append({"id": r["id"], "kind": f"{col}_format", "detail": f"{r[col][:40]!r} -> {fn(r[col])!r}"})
+                    if fix:
+                        c.execute(f"UPDATE scholarships SET {col}=? WHERE id=?", (fn(r[col]), r["id"]))
+                        fixed += 1
+            if r["verdict"] == "qualified" and not r["pinned"]:
+                if r["deadline"] and r["deadline"] < today_:
+                    issues.append({"id": r["id"], "kind": "qualified_but_closed", "detail": f"{r['name'][:50]} closed {r['deadline']}"})
+                    if fix:
+                        c.execute("UPDATE scholarships SET verdict='rejected', verdict_reason=? WHERE id=?", (f"Closed on {r['deadline']}", r["id"]))
+                        fixed += 1
+                if r["source"] in ("linkedin", "linkedin-link") and r["open_date"] and r["open_date"] > today_:
+                    issues.append({"id": r["id"], "kind": "linkedin_not_open", "detail": f"{r['name'][:50]} opens {r['open_date']}"})
+                    if fix:
+                        c.execute("UPDATE scholarships SET verdict='rejected', verdict_reason=? WHERE id=?", (f"Not open yet (opens {r['open_date']})", r["id"]))
+                        fixed += 1
+            if r["pinned"] and r["verdict"] != "qualified":
+                issues.append({"id": r["id"], "kind": "tracked_but_hidden", "detail": r["name"][:50]})
+                if fix:
+                    c.execute("UPDATE scholarships SET verdict='qualified', verdict_reason='' WHERE id=?", (r["id"],))
+                    fixed += 1
+            if r["url"] and is_short_link(r["url"]):
+                issues.append({"id": r["id"], "kind": "short_link", "detail": r["url"][:60]})
+        for table in ("todos", "professors"):
+            orphans = [x[0] for x in c.execute(f"SELECT id FROM {table} WHERE scholarship_id IS NOT NULL AND scholarship_id NOT IN (SELECT id FROM scholarships)")]
+            if orphans:
+                issues.append({"id": None, "kind": f"orphan_{table}", "detail": f"{len(orphans)} rows"})
+                if fix:
+                    c.execute(f"DELETE FROM {table} WHERE id IN ({','.join('?' * len(orphans))})", orphans)
+                    fixed += len(orphans)
+        ghost = [x[0] for x in c.execute("SELECT id FROM notifications WHERE ref_id IS NOT NULL AND ref_id NOT IN (SELECT id FROM scholarships)")]
+        if ghost:
+            issues.append({"id": None, "kind": "orphan_notifications", "detail": f"{len(ghost)} rows"})
+            if fix:
+                c.execute(f"DELETE FROM notifications WHERE id IN ({','.join('?' * len(ghost))})", ghost)
+                fixed += len(ghost)
+        dup_pairs = [(a["id"], b["id"]) for i, a in enumerate(rows) for b in rows[i + 1:] if same_scholarship(a, b)]
+        for x, y in dup_pairs:
+            issues.append({"id": x, "kind": "duplicate", "detail": f"{x} and {y} are the same scholarship"})
+    if fix and dup_pairs:
+        fixed += merge_duplicates()
+    return {"issues": issues, "count": len(issues), "fixed": fixed}
+
+
+@app.get("/api/audit")
+def audit():
+    return run_audit(False)
+
+
+@app.post("/api/audit/fix")
+def audit_fix():
+    return run_audit(True)
+
+
 @app.post("/api/dedupe")
-def dedupe_now():
-    return {"merged": merge_duplicates()}
+def dedupe_now(deep: bool = False):
+    """Merge duplicates. deep=true also asks the model to settle the uncertain ones."""
+    return {"merged": merge_duplicates(use_llm=deep)}
 
 
 @app.post("/api/verify")
@@ -535,6 +788,7 @@ def clean_url(u):
 
 def fetch_page(url):
     """Returns (text, [(anchor_text, absolute_href)])."""
+    url = resolve_url(url)
     r = httpx.get(url, follow_redirects=True, timeout=20, headers={"User-Agent": "Mozilla/5.0 ScholarPilot"})
     soup = BeautifulSoup(r.text, "html.parser")
     links = []

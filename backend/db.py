@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS notifications (
   id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, title TEXT, body TEXT, ref_id INTEGER, read INTEGER DEFAULT 0,
   created TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS dedupe_checked (sig TEXT PRIMARY KEY, created TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS todos (
   id INTEGER PRIMARY KEY AUTOINCREMENT, scholarship_id INTEGER, text TEXT, kind TEXT DEFAULT 'step',
   done INTEGER DEFAULT 0, source TEXT DEFAULT 'auto', detail TEXT DEFAULT '', created TEXT DEFAULT CURRENT_TIMESTAMP);
@@ -53,7 +54,7 @@ MIGRATIONS = {
     "scholarships": [("pinned", "INTEGER DEFAULT 0"), ("steps_done", "TEXT DEFAULT '[]'"),
                      ("research", "TEXT DEFAULT ''"), ("fit", "TEXT DEFAULT ''"), ("fit_reason", "TEXT DEFAULT ''"), ("eligibility_check", "TEXT DEFAULT ''"), ("verdict", "TEXT DEFAULT ''"),
                      ("verdict_reason", "TEXT DEFAULT ''"), ("verified_at", "TEXT DEFAULT ''"),
-                     ("confidence", "TEXT DEFAULT ''"), ("application_mode", "TEXT DEFAULT ''"), ("application_fee", "TEXT DEFAULT ''")],
+                     ("confidence", "TEXT DEFAULT ''"), ("verify_tries", "INTEGER DEFAULT 0"), ("application_mode", "TEXT DEFAULT ''"), ("application_fee", "TEXT DEFAULT ''")],
 }
 
 JSON_COLS = ("required_docs", "docs_done", "steps_done")
@@ -61,8 +62,10 @@ JSON_COLS = ("required_docs", "docs_done", "steps_done")
 
 def conn():
     DB_PATH.parent.mkdir(exist_ok=True)
-    c = sqlite3.connect(DB_PATH)
+    c = sqlite3.connect(DB_PATH, timeout=30)  # several background workers write at once
     c.row_factory = sqlite3.Row
+    c.execute("PRAGMA busy_timeout=30000")
+    c.execute("PRAGMA journal_mode=WAL")
     return c
 
 

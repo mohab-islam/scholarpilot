@@ -24,13 +24,25 @@ def client():
     return _client
 
 
+def call_with_retry(fn, tries=4):
+    """Retry quota / availability errors with backoff; everything else fails immediately."""
+    import time
+    for i in range(tries):
+        try:
+            return fn()
+        except Exception as e:
+            transient = any(t in str(e) for t in ("429", "503", "500", "RESOURCE_EXHAUSTED", "UNAVAILABLE", "DEADLINE_EXCEEDED"))
+            if not transient or i == tries - 1:
+                raise
+            time.sleep(2 ** i * 2)
+
+
 def generate(prompt, system=None, search=False, temperature=0.7):
     """Call Gemini on Vertex. search=True enables Google Search grounding."""
     cfg = types.GenerateContentConfig(
         system_instruction=system, temperature=temperature,
         tools=[types.Tool(google_search=types.GoogleSearch())] if search else None)
-    resp = client().models.generate_content(model=MODEL, contents=prompt, config=cfg)
-    return resp.text or ""
+    return call_with_retry(lambda: client().models.generate_content(model=MODEL, contents=prompt, config=cfg)).text or ""
 
 
 def parse_json(text):
@@ -92,6 +104,19 @@ deadline, and the complete list of required documents. Return ONLY one JSON obje
 Use '' / [] when you cannot verify something; never guess dates.
 {applicant_clause()}"""
     return parse_json(generate(prompt, search=True, temperature=0.1))
+
+
+def second_source_deadline(name, url, today):
+    """A differently-phrased, independent Google-grounded lookup of just the deadline (used when the official page
+    cannot be read). Returns an ISO date or ''."""
+    import agents
+    prompt = f"""Today is {today}. Using Google Search, find the OFFICIAL application deadline for the next intake of
+"{name}" {('(' + url + ')') if url else ''}. Prefer the awarding organisation's own website. If several tracks have different
+deadlines give the one for international master's applicants. Return ONLY JSON: {{"deadline": "YYYY-MM-DD or ''", "source": "url"}}.
+Never guess; use '' when you cannot verify."""
+    text, _ = agents.search_text(prompt, 0.0)
+    res = parse_json(text)
+    return (res[0] if isinstance(res, list) and res else res).get("deadline", "") if res else ""
 
 
 def discover(profile_summary, query, today):

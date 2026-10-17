@@ -13,7 +13,8 @@ import db
 _wake = threading.Event()
 _run_lock = threading.Lock()
 STATE = {"running": False, "last_run": "", "checked": 0, "last_error": ""}
-WORKERS = 4
+WORKERS = 3
+MAX_TRIES = 3
 
 
 def today():
@@ -37,8 +38,11 @@ LINKEDIN_SOURCES = ("linkedin", "linkedin-link")
 
 def reconcile(research_deadline, page_deadline):
     """Compare the web-research date with the date read from the official page.
-    Returns (deadline_to_use, confidence, note). The official page wins when they disagree."""
+    Returns (deadline_to_use, confidence, note). The official page wins when they disagree.
+    A page date that is already in the past while research found an upcoming one is last cycle's date: ignored."""
     r, p = _parse(research_deadline), _parse(page_deadline)
+    if r and p and p < date.today() <= r:
+        p = None
     if r and p:
         if r == p:
             return p.isoformat(), "confirmed", ""
@@ -86,6 +90,15 @@ def verify_one(sid):
         main.save_scholarship(res, "research")  # fills dates, documents, eligibility, fit on the existing row
         with db.conn() as c:
             row = db.row(c.execute("SELECT * FROM scholarships WHERE id=?", (sid,)).fetchone())
+        if row.get("url") and main.is_short_link(row["url"]):
+            real = main.resolve_url(row["url"])
+            if real and real != row["url"]:
+                try:
+                    with db.conn() as c:
+                        c.execute("UPDATE scholarships SET url=? WHERE id=?", (real, sid))
+                    row["url"] = real
+                except Exception:
+                    pass  # another record already owns that URL; the duplicate merge will take care of it
         # second, independent check: read the official page itself and compare
         page_deadline = ""
         if row.get("url"):
@@ -93,10 +106,28 @@ def verify_one(sid):
                 text = main.fetch_page(row["url"])[0]
                 found = ai.extract_scholarships(text[:20000], today())
                 best = max(found, key=lambda f: len(main.name_tokens(f.get("name")) & main.name_tokens(row["name"])), default={})
-                page_deadline = best.get("deadline") or ""
+                page_deadline = main.normalize_date(best.get("deadline") or "")
             except Exception:
                 page_deadline = ""
+        conflict = ""
+        if not page_deadline:  # official page unreadable: ask a second, independent grounded query instead
+            try:
+                second = main.normalize_date(ai.second_source_deadline(row["name"], row.get("url"), today()))
+            except Exception:
+                second = ""
+            stale = bool(second and row.get("deadline") and second < today() <= row["deadline"])  # last cycle's date
+            if stale:
+                second = ""
+            if second and row.get("deadline"):
+                if second == row["deadline"]:
+                    page_deadline = second  # two independent sources agree: confirmed
+                else:
+                    conflict = f"Sources disagree on the deadline ({row['deadline']} vs {second}); check the official page"
+            elif second and not row.get("deadline"):
+                page_deadline = second
         use, confidence, note = reconcile(row.get("deadline"), page_deadline)
+        if conflict:
+            confidence, note = "conflict", conflict
         with db.conn() as c:
             if use and use != row.get("deadline"):
                 c.execute("UPDATE scholarships SET deadline=? WHERE id=?", (use, sid))
@@ -104,13 +135,20 @@ def verify_one(sid):
             c.execute("UPDATE scholarships SET confidence=? WHERE id=?", (confidence, sid))
         row["confidence"] = confidence
         verdict, reason = decide(row, main.level_set(main.get_profile().get("target_level")))
-        if verdict == "qualified" and note:
+        if verdict == "qualified" and row.get("confidence") == "conflict":
+            verdict, reason = "review", note  # sources disagree: a person should look before it is shown as open
+        elif verdict == "qualified" and note:
             reason = note  # shown as a hint on the card
         if row.get("pinned"):
             verdict, reason = "qualified", ""  # never hide something you decided to track
     except Exception as e:
         STATE["last_error"] = str(e)[:200]
-        verdict, reason = "review", "Could not be verified automatically"
+        with db.conn() as c:
+            tries = (c.execute("SELECT verify_tries FROM scholarships WHERE id=?", (sid,)).fetchone() or [0])[0] + 1
+            if tries < MAX_TRIES:  # transient problems (quota, timeouts) get another go on the next round
+                c.execute("UPDATE scholarships SET verify_tries=? WHERE id=?", (tries, sid))
+                return
+        verdict, reason = "review", "Could not be verified automatically: " + str(e)[:80]
     with db.conn() as c:
         c.execute("UPDATE scholarships SET verdict=?, verdict_reason=?, verified_at=? WHERE id=?",
                   (verdict, reason, today(), sid))
@@ -123,7 +161,7 @@ def verify_one(sid):
 
 def pending_ids(limit=40):
     with db.conn() as c:
-        return [r[0] for r in c.execute("SELECT id FROM scholarships WHERE verdict='pending' ORDER BY id LIMIT ?", (limit,))]
+        return [r[0] for r in c.execute("SELECT id FROM scholarships WHERE verdict='pending' AND verify_tries<? ORDER BY id LIMIT ?", (MAX_TRIES, limit))]
 
 
 def run_until_idle():
@@ -140,7 +178,7 @@ def run_until_idle():
             done += len(ids)
         try:
             import main
-            main.merge_duplicates()  # no overlaps between sources
+            main.merge_duplicates(use_llm=True)  # no overlaps between sources
         except Exception as e:
             STATE["last_error"] = str(e)[:200]
     finally:

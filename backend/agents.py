@@ -10,7 +10,7 @@ def search_text(prompt, temperature=0.3):
     """Google-grounded generation. Returns (text, [{title,url}])."""
     cfg = types.GenerateContentConfig(temperature=temperature,
                                       tools=[types.Tool(google_search=types.GoogleSearch())])
-    resp = ai.client().models.generate_content(model=ai.MODEL, contents=prompt, config=cfg)
+    resp = ai.call_with_retry(lambda: ai.client().models.generate_content(model=ai.MODEL, contents=prompt, config=cfg))
     sources = []
     try:
         for ch in resp.candidates[0].grounding_metadata.grounding_chunks or []:

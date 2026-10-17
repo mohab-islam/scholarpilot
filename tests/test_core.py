@@ -194,6 +194,7 @@ def test_double_check_prefers_the_official_page_and_linkedin_must_be_open():
     use, conf, note = verifier.reconcile(day(20), day(35))
     assert use == day(35) and conf == "official" and "corrected" in note
     assert verifier.reconcile(day(20), "")[1] == "single-source"
+    assert verifier.reconcile(day(20), day(-300)) == (day(20), "single-source", "Date not found on the official page; confirm before applying")  # stale page date ignored
     want = {"master"}
     upcoming = {"source": "linkedin", "level": "Master", "open_date": day(40), "deadline": day(90)}
     assert verifier.decide(upcoming, want)[0] == "rejected"
@@ -232,3 +233,67 @@ def test_bulk_track_and_skip(client):
 def test_stats_endpoint_shape(client):
     s = client.get("/api/stats").json()
     assert len(s["per_day"]) == 14 and set(s["funnel"]) >= {"found", "qualified", "tracked"}
+
+
+def test_dates_are_normalised():
+    import main
+    assert main.normalize_date("2026-11-27") == "2026-11-27"
+    assert main.normalize_date("2027-01") == "2027-01-31"
+    assert main.normalize_date("December 2026") == "2026-12-31"
+    assert main.normalize_date("15 March 2027") == "2027-03-15"
+    assert main.normalize_date("Dec 2, 2026 / Jan 7, 2027 (course dependent)") == "2027-01-07"
+    assert main.normalize_date("Relevant deadline depends on the course") == ""
+    assert main.normalize_date("") == ""
+
+
+def test_identity_handles_accents_and_acronyms():
+    import main
+    assert main.same_scholarship({"name": "Sabanci University Scholarship 2027", "provider": "Sabanci University"},
+                                 {"name": "Sabanc\u0131 University Graduate Scholarships", "provider": "Sabanc\u0131 University"})
+    mbz = {"name": "Mohamed bin Zayed University of Artificial Intelligence (MBZUAI) Scholarship", "provider": "Mohamed bin Zayed University of Artificial Intelligence"}
+    assert main.related(mbz, {"name": "MBZUAI Graduate Scholarships", "provider": "MBZUAI"})
+    assert main.same_scholarship({"name": "MBZUAI Scholarship", "provider": "MBZUAI"}, {"name": "MBZUAI Graduate Scholarships", "provider": "MBZUAI"})
+    # same scheme name at different universities stays separate; umbrella and specific programme are not auto-merged
+    assert not main.same_scholarship({"name": "Sp\u00e4rck AI Scholarship (Edinburgh)", "provider": "University of Edinburgh"},
+                                     {"name": "Sp\u00e4rck AI Scholarship (UCL)", "provider": "University College London"})
+    assert not main.same_scholarship({"name": "Erasmus Mundus Joint Masters (EMJM)", "provider": "European Union"},
+                                     {"name": "Erasmus Mundus Joint Master in Artificial Intelligence (EMAI)", "provider": "EMAI Consortium"})
+
+
+def test_short_links_are_recognised():
+    import main
+    assert main.is_short_link("https://lnkd.in/dJ_u2QzY") and main.is_short_link("https://bit.ly/x")
+    assert not main.is_short_link("https://www.daad.de/en/")
+
+
+def test_uncertain_duplicates_are_settled_by_the_model_once(client, monkeypatch):
+    import db
+    import main
+    with db.conn() as con:
+        for name, prov in (("Clarendon Oxford", "University of Oxford"), ("Clarendon Fund Scholarships", "University of Oxford"),
+                           ("Chevening Scholarships", "UK FCDO")):
+            con.execute("INSERT INTO scholarships(name,provider,source,verdict) VALUES(?,?,?,?)", (name, prov, "google", "qualified"))
+        ids = [r[0] for r in con.execute("SELECT id FROM scholarships ORDER BY id")]
+    calls = []
+    monkeypatch.setattr(main, "adjudicate_duplicates", lambda cl: calls.append(len(cl)) or [[ids[0], ids[1]]])
+    assert main.merge_duplicates(use_llm=True) == 1
+    assert main.merge_duplicates(use_llm=True) == 0 and len(calls) == 1  # decision remembered, no second model call
+
+
+def test_audit_finds_and_repairs_problems(client):
+    import db
+    with db.conn() as con:
+        con.execute("INSERT INTO scholarships(name,source,verdict,deadline) VALUES('Old','google','qualified',?)", (day(-5),))
+        con.execute("INSERT INTO scholarships(name,source,verdict,deadline) VALUES('Fuzzy','google','review','2027-01')")
+        con.execute("INSERT INTO todos(scholarship_id,text) VALUES(9999,'orphan')")
+    kinds = {i["kind"] for i in client.get("/api/audit").json()["issues"]}
+    assert {"qualified_but_closed", "date_format", "orphan_todos"} <= kinds
+    assert client.post("/api/audit/fix").json()["fixed"] >= 3
+    assert client.get("/api/audit").json()["count"] == 0
+
+
+def test_application_type_and_fee_are_cleaned():
+    import main
+    assert main.norm_mode("online | offline") == "both" and main.norm_mode("Online portal") == "online" and main.norm_mode("by post") == "offline"
+    assert main.norm_mode("") == "" and main.norm_mode("n/a") == ""
+    assert main.norm_fee("''") == "" and main.norm_fee("Not stated") == "" and main.norm_fee("no fee") == "Free" and main.norm_fee("EUR 50") == "EUR 50"
