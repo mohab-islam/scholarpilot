@@ -250,6 +250,43 @@ def pin(sid: int, b: PinIn, bg: BackgroundTasks):
     return {"ok": True}
 
 
+class UniIn(BaseModel):
+    name: str
+    url: str = ""
+    level: str = ""
+    deadline: str = ""   # optional: your own dates win over what the research finds
+    open_date: str = ""
+
+
+@router.post("/universities")
+def add_university(b: UniIn, bg: BackgroundTasks):
+    """A university/programme you chose yourself: research its dates and documents, track it, build its to-do list,
+    and verify the dates in the background. Tracked items are included in the Gmail checks automatically."""
+    name = b.name.strip()
+    if len(name) < 3:
+        raise HTTPException(400, "Enter the university or programme name.")
+    res = call(ai.research_programme, name, b.url.strip(), b.level.strip(), date.today().isoformat())
+    if isinstance(res, list):
+        res = res[0] if res else {}
+    res["name"] = name
+    if b.url.strip():
+        res["url"] = b.url.strip()
+    if b.level.strip():
+        res["level"] = b.level.strip()
+    for k in ("deadline", "open_date"):
+        if getattr(b, k).strip():
+            res[k] = m().normalize_date(getattr(b, k).strip()) or getattr(b, k).strip()
+    sid = m().save_scholarship(res, "manual")
+    if not sid:
+        raise HTTPException(400, "Could not save that programme.")
+    pin(sid, PinIn(), bg)
+    import verifier
+    bg.add_task(verifier.verify_one, sid)  # second check of the dates (official page + independent search)
+    s = scholarship(sid)
+    return {"id": sid, "name": s["name"], "deadline": s.get("deadline") or "", "open_date": s.get("open_date") or "",
+            "documents": len(s.get("required_docs") or [])}
+
+
 class StepIn(BaseModel):
     step: str
     done: bool

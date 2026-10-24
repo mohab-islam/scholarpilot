@@ -54,7 +54,12 @@ const VIEWS = {
   async sch() {
     const counts = await api('/scholarships/counts');
     const list = (await api('/scholarships?view=' + schView)).filter(s => !searchQ || [s.name, s.provider, s.country, s.level, s.field].join(' ').toLowerCase().includes(searchQ.toLowerCase()));
-    $('#main').innerHTML = `<details class="card"><summary><h2 style="display:inline">＋ Add a scholarship</h2></summary><div class="row"><input id="u" placeholder="Paste scholarship page URL"><button class="btn" id="addu">Extract from URL</button></div>
+    $('#main').innerHTML = `<details class="card"><summary><h2 style="display:inline">＋ Add a scholarship or a university</h2></summary>
+      <h3 style="margin-top:12px">A university or programme I am applying to</h3>
+      <p class="mute">Type its name. ScholarPilot finds the dates and required documents, tracks it with a to-do list and includes it in the email checks.</p>
+      <div class="row"><input id="un" placeholder="e.g. TU Munich, MSc Informatics"><input id="uu" placeholder="Programme page URL (optional)"></div>
+      <div class="row" style="margin-top:8px"><input id="ud" placeholder="Your own deadline YYYY-MM-DD (optional)"><button class="btn" id="uadd" style="flex:0;white-space:nowrap">Add &amp; track</button></div>
+      <h3 style="margin-top:16px">A scholarship page or text</h3><div class="row"><input id="u" placeholder="Paste scholarship page URL"><button class="btn" id="addu">Extract from URL</button></div>
       <label>…or paste any text (announcement, email, post)</label><textarea id="t"></textarea><br><br><button class="btn" id="addt">Extract from text</button></details>
       <div class="card">${searchQ ? `<span class="pill">search: ${esc(searchQ)}</span><a href="#" id="clq">clear</a>` : ''}<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">${[['qualified', 'Open & eligible'], ['review', 'Dates unconfirmed'], ['rejected', 'Filtered out'], ['pending', 'Verifying']].map(([k, l]) => `<button class="btn sm ${schView === k ? '' : 'ghost'}" data-view="${k}">${l} · ${counts[k] || 0}</button>`).join('')}<button class="btn sm ghost" id="rv">Re-check filtered</button>${counts.pending ? '<span class="mute">verifying in the background…</span>' : ''}</div><div class="mute" style="margin-top:6px">Everything found automatically is checked for dates, documents and eligibility. Only open or upcoming scholarships you can apply for are shown by default.</div></div>
       <div class="bulk"><label class="chk"><input type="checkbox" id="selall"> Select all ${list.length}</label><span class="mute" id="selcount"></span></div>
@@ -62,6 +67,10 @@ const VIEWS = {
     if ($('#clq')) $('#clq').onclick = ev => { ev.preventDefault(); searchQ = ''; $('#gs').value = ''; render(); };
     document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => { schView = b.dataset.view; render(); });
     $('#rv').onclick = async () => { await api('/verify/reset', {method: 'POST'}); toast('Re-checking filtered scholarships'); render(); };
+    $('#uadd').onclick = e => busy(e.target, 'Researching (about a minute)…', async () => {
+      const r = await api('/universities', {method: 'POST', body: {name: $('#un').value, url: $('#uu').value, deadline: $('#ud').value}});
+      toast(`Tracking ${r.name}: ${r.deadline ? 'deadline ' + r.deadline : 'deadline not found, check the official page'}; ${r.documents} documents`);
+      appId = r.id; tab = 'app'; render(); });
     $('#addu').onclick = e => busy(e.target, 'Reading…', async () => { const r = await api('/scholarships/extract', {method: 'POST', body: {url: $('#u').value}}); toast(`Added ${r.added}`); render(); });
     $('#addt').onclick = e => busy(e.target, 'Reading…', async () => { const r = await api('/scholarships/extract', {method: 'POST', body: {text: $('#t').value}}); toast(`Added ${r.added}`); render(); });
     const box = $('#list');

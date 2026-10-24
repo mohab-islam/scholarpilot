@@ -106,6 +106,20 @@ Use '' / [] when you cannot verify something; never guess dates.
     return parse_json(generate(prompt, search=True, temperature=0.1))
 
 
+def research_programme(name, url, level, today):
+    """Research a university programme the applicant chose themselves (not a scholarship listing)."""
+    prompt = f"""Today is {today}. The applicant wants to apply to this university programme: "{name}" {('(' + url + ')') if url else ''}
+{('Degree level: ' + level) if level else "Assume a master's programme unless the name says otherwise."}
+Using Google Search and the university's OFFICIAL admissions pages, find the application window for the NEXT intake
+for international applicants: the date applications open, the deadline, every required document and step (CV, transcripts,
+motivation letter, recommendation letters, language test, portfolio, application fee, interview...), whether the application
+is online or offline, and the fee. Put the university's name in `provider`. Return ONLY one JSON object shaped:
+{SCHOLARSHIP_FIELDS}
+Use '' / [] when you cannot verify something; never guess dates.
+{applicant_clause()}"""
+    return parse_json(generate(prompt, search=True, temperature=0.1))
+
+
 def second_source_deadline(name, url, today):
     """A differently-phrased, independent Google-grounded lookup of just the deadline (used when the official page
     cannot be read). Returns an ISO date or ''."""

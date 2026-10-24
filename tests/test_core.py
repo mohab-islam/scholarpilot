@@ -371,3 +371,23 @@ def test_ingest_force_requeues_posts_seen_before(client):
     forced = client.post("/api/linkedin/ingest", json={"posts": [post], "force": True}).json()
     assert first["queued"] == 1 and again["already_seen"] == 1 and again["queued"] == 0
     assert forced["queued"] == 1 and forced["already_seen"] == 0
+
+
+def test_adding_a_university_tracks_it_with_dates_and_todos(client, monkeypatch):
+    import ai, inbox, verifier
+    client.put("/api/profile", json={"data": PROFILE})
+    monkeypatch.setattr(ai, "research_programme", lambda name, url, level, today: {
+        "name": "ignored", "provider": "TU Munich", "url": "https://tum.example/msc", "deadline": day(60), "open_date": day(5),
+        "required_docs": ["CV", "Transcripts", "Two letters of recommendation"], "application_mode": "online", "application_fee": "EUR 50"})
+    monkeypatch.setattr(verifier, "verify_one", lambda sid: None)  # background re-check needs the real model
+    monkeypatch.setattr(inbox, "pull_safely", lambda sid: None)
+    r = client.post("/api/universities", json={"name": "TU Munich MSc Informatics"}).json()
+    assert r["deadline"] == day(60) and r["documents"] == 3
+    with __import__("db").conn() as c:
+        row = c.execute("SELECT name,pinned,provider FROM scholarships WHERE id=?", (r["id"],)).fetchone()
+    assert row["pinned"] == 1 and row["name"] == "TU Munich MSc Informatics"
+    tracked = [{"url": "https://tum.example/msc", "name": row["name"], "provider": row["provider"]}]
+    assert inbox.match_message({"from": "admissions@tum.example", "subject": "Your application", "body": ""}, tracked, [])
+    own = client.post("/api/universities", json={"name": "Uni Two Programme", "deadline": day(90)}).json()
+    assert own["deadline"] == day(90)  # your own date wins
+    assert client.post("/api/universities", json={"name": "x"}).status_code == 400
