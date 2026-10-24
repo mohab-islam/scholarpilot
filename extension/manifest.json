@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "ScholarPilot – LinkedIn Saved Posts",
-  "version": "2.1",
+  "name": "ScholarPilot - LinkedIn Saved Posts",
+  "version": "2.2",
   "description": "Scrolls your LinkedIn saved posts, removes duplicates and sends the scholarship-related ones to your ScholarPilot server.",
   "permissions": [
     "activeTab",
@@ -21,7 +21,14 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_title": "ScholarPilot"
   },
   "content_scripts": [
     {
@@ -33,6 +40,22 @@
         "content.js"
       ],
       "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "icons/icon48.png"
+      ],
+      "matches": [
+        "https://www.linkedin.com/*"
+      ]
     }
   ]
 }

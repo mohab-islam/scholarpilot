@@ -1,14 +1,45 @@
-<!doctype html><html><body style="width:300px;font:14px system-ui;padding:12px">
-<b>ScholarPilot</b>
-<details style="margin:6px 0"><summary style="cursor:pointer;color:#666">Server settings</summary>
-<input id="srv" placeholder="https://your-server (blank = local)" style="width:100%;margin:4px 0;padding:5px">
-<input id="tok" type="password" placeholder="Extension token" style="width:100%;margin-bottom:4px;padding:5px">
-<button id="savecfg" style="width:100%;padding:5px">Save</button></details>
-<p style="color:#666;margin:6px 0">Open LinkedIn → Saved posts, then:</p>
-<button id="go" style="width:100%;padding:9px;font-weight:600">Scroll &amp; send all saved posts</button>
-<button id="stop" style="width:100%;padding:6px;margin-top:6px;display:none">Stop scrolling and send what is loaded</button>
-<div id="bar" style="height:6px;background:#ddd;border-radius:4px;margin-top:10px;display:none"><i id="fill" style="display:block;height:100%;width:0;background:#34503d;border-radius:4px"></i></div>
-<p id="msg" style="white-space:pre-line;margin:8px 0"></p>
-<hr><button id="prof" style="width:100%;padding:7px">Import my LinkedIn profile</button>
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>ScholarPilot</title>
+<style>
+:root{--ink:#2b2a23;--mute:#7a7260;--line:#d9ccb2;--bg:#f7f1e6;--card:#fffaf0;--green:#34503d;--green2:#4d7358;--sky:#6f95b5}
+*{box-sizing:border-box}
+body{margin:0;width:340px;font:14px/1.4 "Segoe UI",system-ui,sans-serif;color:var(--ink);background:var(--bg)}
+header{display:flex;align-items:center;gap:10px;padding:14px 16px;background:linear-gradient(180deg,#a9c3d6,#ecd7b8);border-bottom:1px solid var(--line)}
+header img{width:36px;height:36px;border-radius:9px;box-shadow:0 2px 6px rgba(0,0,0,.18)}
+header b{font-size:16px;display:block}header span{font-size:12px;color:#4b4a3f}
+main{padding:14px 16px 16px}
+.step{color:var(--mute);font-size:12px;margin:0 0 6px;text-transform:uppercase;letter-spacing:.06em}
+button{font:inherit;cursor:pointer;border-radius:11px;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:9px 12px;width:100%}
+button.primary{background:var(--green);color:#fff;border:0;font-weight:600;padding:11px 12px}
+button.primary:hover:not(:disabled){background:var(--green2)}
+button:disabled{opacity:.55;cursor:default}
+.row{display:flex;gap:8px;margin-top:8px}.row button{width:auto;flex:1}
+#bar{height:7px;background:#e6dcc5;border-radius:6px;margin-top:12px;overflow:hidden;display:none}
+#fill{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--sky),var(--green));transition:width .3s}
+#msg{white-space:pre-line;margin:10px 0 0;font-size:13px;min-height:18px}
+#msg.err{color:#a3321f}#msg.ok{color:var(--green)}
+hr{border:0;border-top:1px solid var(--line);margin:14px 0}
+label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--mute);margin-top:6px}
+details{margin-top:12px;font-size:13px}summary{cursor:pointer;color:var(--mute)}
+input[type=text],input[type=password],input[type=number]{width:100%;margin-top:6px;padding:7px 9px;border:1px solid var(--line);border-radius:9px;background:#fff;font:inherit}
+</style></head><body>
+<header><img src="icons/icon48.png" alt=""><div><b>ScholarPilot</b><span id="conn">Connecting…</span></div></header>
+<main>
+<p class="step">1 · Saved posts</p>
+<button id="go" class="primary">Scroll &amp; send saved posts</button>
+<div class="row"><button id="stop" style="display:none">Stop and send what is loaded</button><button id="reset" style="display:none">Reset</button></div>
+<div id="bar"><i id="fill"></i></div>
+<p id="msg"></p>
+<hr>
+<p class="step">2 · Your profile</p>
+<button id="prof">Import my LinkedIn profile</button>
+<label class="chk"><input type="checkbox" id="ow"> Replace fields that are already filled</label>
+<details><summary>Settings</summary>
+<input id="lim" type="number" min="5" max="200" placeholder="Newest saved posts to analyse (default 50)">
+<input id="srv" type="text" placeholder="https://your-server (blank = local)">
+<input id="tok" type="password" placeholder="Extension token">
+<div class="row"><button id="savecfg">Save</button></div></details>
+</main>
 <script src="config.local.js"></script>
 <script src="popup.js"></script></body></html>

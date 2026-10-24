@@ -37,7 +37,8 @@ Applying for scholarships means juggling dozens of tabs: saved LinkedIn posts, a
 | ⏳ **Dashboard** | Live countdown to the nearest deadline, a timeline per application, pipeline funnel, discovery sparkline, deadline timeline and document-readiness ring. |
 | 🔔 **Notifications** | In-app bell with unread count, plus an optional email summary ("12 new scholarships added") sent to your own Gmail when new verified ones arrive. |
 | 🎓 **University and professors** | A research agent finds the programme, labs and matching professors with public pages and emails (only from official pages, never guessed) and drafts a specific cold email. |
-| ✍️ **Letter lab** | Research agents gather what makes a strong letter; templates; an interview that draws out your real stories; **version history with diffs**; "sound like me" rewrite from your own writing; authenticity check for generic sentences. |
+| 📝 **Recommendation letters** | Add a professor once (name, email, what they taught you, one achievement) and get a generic master's-level draft they can edit and sign. Store the signed letter, and on any tracked scholarship that asks for one, draft or send the request email (scholarship name and deadline filled in, draft attached) through Gmail after your confirmation. |
+| ✍️ **Letter lab** | Nine research agents gather what makes a strong letter, and you can add your own links or text as sources; templates; an interview that draws out your real stories; **version history with diffs**; "sound like me" rewrite from your own writing; authenticity check for generic sentences. |
 | ✉️ **Gmail** | Drafts, and sends only after explicit confirmation. A background watcher reads mail about the scholarships you track and **updates statuses automatically**; document requests become to-dos. |
 | 🔐 **Private by design** | Single user, your data in your own SQLite file and your own Google Cloud project. Hosted mode adds login, HTTPS and strict host/origin checks. |
 
@@ -99,7 +100,7 @@ While the consent screen is in *testing* mode Google expires the token after 7 d
 ### Chrome extension (LinkedIn)
 
 1. `chrome://extensions` → **Developer mode** → **Load unpacked** → select the `extension/` folder.
-2. Open LinkedIn → *Saved posts*. A small ScholarPilot box appears; press **Scroll & send saved posts**.
+2. Open LinkedIn → *Saved posts*. A small ScholarPilot tray appears; press **Scroll & send saved posts**. Or press **Import scholarships from LinkedIn** in the app's LinkedIn tab: it opens the saved posts and starts the tray by itself. On your own profile page, the tray's **Import my profile** fills your ScholarPilot profile (empty fields only, unless you tick *Replace fields that are already filled* in the popup).
 3. Optional `extension/config.local.js` sets a default server and token for your machine (git-ignored):
    ```js
    self.SP_CONFIG = { srv: "https://your-server.example", tok: "YOUR_EXTENSION_TOKEN" };

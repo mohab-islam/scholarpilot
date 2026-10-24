@@ -190,9 +190,11 @@ const VIEWS = {
 
   async li() {
     $('#main').innerHTML = `<div class="card"><h2>LinkedIn saved posts</h2>
+      <p><a class="btn" href="https://www.linkedin.com/my-items/saved-posts/#scholarpilot-autostart" target="_blank" rel="noopener">Import scholarships from LinkedIn</a></p>
+      <p class="mute">Opens your saved posts and starts the ScholarPilot extension (the tray at the bottom right) by itself. First time only, install it as described below.</p>
       <ol><li>Open <code>chrome://extensions</code>, enable Developer mode, click <b>Load unpacked</b>, choose the <code>extension</code> folder of this project.</li>
       <li>Go to <a href="https://www.linkedin.com/my-items/saved-posts/" target="_blank" rel="noopener">your LinkedIn saved posts</a> (scroll to load the ones you want).</li>
-      <li>Click the ScholarPilot extension icon → <b>Scroll &amp; send all saved posts</b>. It scrolls the page by itself until everything is loaded, removes duplicates, skips posts that are not about scholarships and ones it has already processed, then analyses the rest. You can close the popup; it keeps running. The AI reads each post and also opens the websites it links to. If a link is a blog/aggregator listing many scholarships, it follows through to each scholarship's own page and reads the real requirements.</li></ol>
+      <li>Click <b>Scroll &amp; send saved posts</b> in the ScholarPilot tray (it starts by itself when you arrive from the button above). It scrolls the page by itself until everything is loaded, removes duplicates, skips posts that are not about scholarships and ones it has already processed, then analyses the rest. You can close the popup; it keeps running. The AI reads each post and also opens the websites it links to. If a link is a blog/aggregator listing many scholarships, it follows through to each scholarship's own page and reads the real requirements.</li></ol>
       <p class="mute">The extension only reads the page you're viewing, in your own browser session. Nothing is scraped in the background and no password is stored.</p></div>
       <div class="card"><h2>Re-check everything</h2><p class="mute">The server remembers posts it has already looked at (including ones it judged not to be about scholarships) so repeat runs are fast and cheap. Reset that memory if you want every saved post analysed again.</p><button class="btn ghost" id="rs">Forget processed posts</button></div>
       <div class="card"><h2>No extension? Paste posts</h2><textarea id="pt" placeholder="Paste one or more posts"></textarea><br><br><button class="btn" id="pg">Extract</button></div>`;
@@ -204,5 +206,6 @@ let writeFor = null, appId = null, schView = 'qualified', searchQ = '', selected
 </script>
 <script src="/static/extra.js"></script>
 <script src="/static/dash.js"></script>
+<script src="/static/recs.js"></script>
 </body>
 </html>

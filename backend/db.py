@@ -45,6 +45,14 @@ CREATE TABLE IF NOT EXISTS dedupe_checked (sig TEXT PRIMARY KEY, created TEXT DE
 CREATE TABLE IF NOT EXISTS todos (
   id INTEGER PRIMARY KEY AUTOINCREMENT, scholarship_id INTEGER, text TEXT, kind TEXT DEFAULT 'step',
   done INTEGER DEFAULT 0, source TEXT DEFAULT 'auto', detail TEXT DEFAULT '', created TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS recommenders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, email TEXT, title TEXT, university TEXT, department TEXT,
+  relationship TEXT, course TEXT, course_where TEXT, course_year TEXT, achievement TEXT, extra TEXT,
+  draft TEXT DEFAULT '', draft_at TEXT, signed_name TEXT, signed_file TEXT, signed_at TEXT,
+  created TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS rec_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, recommender_id INTEGER, scholarship_id INTEGER, status TEXT DEFAULT 'drafted',
+  created TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS mail_events (
   msg_id TEXT PRIMARY KEY, scholarship_id INTEGER, professor_id INTEGER, kind TEXT, summary TEXT,
   subject TEXT, sender TEXT, mail_date TEXT, created TEXT DEFAULT CURRENT_TIMESTAMP);

@@ -24,6 +24,7 @@ import db
 import auth
 import inbox
 import pipeline
+import recs
 import jobs
 import verifier
 
@@ -1113,7 +1114,7 @@ EXTRA ANSWERS FROM APPLICANT:
 {b.extra_answers or '(none)'}
 
 RESEARCHED BEST PRACTICE (apply it, do not quote it):
-{pipeline.playbook_text(4500) or '(none yet)'}
+{pipeline.playbook_text(7000) or '(none yet)'}
 
 {('FOLLOW THIS TEMPLATE STRUCTURE, filling placeholders from the applicant data:' + chr(10) + pipeline.template_body(b.template_id)) if b.template_id else ''}
 
@@ -1298,6 +1299,7 @@ def delete_letter(lid: int):
 app.include_router(auth.router)
 app.include_router(pipeline.router)
 app.include_router(inbox.router)
+app.include_router(recs.router)
 
 
 AVATAR_TYPES = {"avif": "image/avif", "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp"}

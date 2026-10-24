@@ -43,7 +43,7 @@ def scholarship(sid):
 
 
 # ---------- playbook (letter formula research) ----------
-def playbook_text(limit=7000):
+def playbook_text(limit=10000):
     with db.conn() as c:
         rows = c.execute("SELECT topic,body FROM playbook ORDER BY id").fetchall()
     return "\n\n".join(f"## {r['topic']}\n{r['body']}" for r in rows)[:limit]
@@ -66,6 +66,50 @@ def research_playbook():
         errs = [str(r) for r in results.values() if isinstance(r, Exception)]
         raise HTTPException(502, f"AI error: {errs[0] if errs else 'no results'}")
     return {"topics": saved}
+
+
+class SourceIn(BaseModel):
+    url: str = ""
+    title: str = ""
+    text: str = ""
+
+
+@router.post("/playbook/source")
+def add_playbook_source(b: SourceIn):
+    """Learn from a page or text the user trusts: distil it into actionable advice and add it to the playbook."""
+    text, title, sources = b.text.strip(), b.title.strip(), []
+    if b.url.strip():
+        url = b.url.strip()
+        if not url.startswith(("http://", "https://")):
+            raise HTTPException(400, "The link must start with http:// or https://")
+        try:
+            page, _ = m().fetch_page(url)
+        except Exception as e:
+            raise HTTPException(400, f"Could not open that link: {str(e)[:120]}")
+        text = (text + chr(10) + page).strip()
+        title = title or url.split("//", 1)[-1][:60]
+        sources = [{"title": title, "url": url}]
+    if len(text) < 200:
+        raise HTTPException(400, "Give a link to an article or paste at least a few paragraphs.")
+    prompt = f"""Distil the advice in this source about writing scholarship motivation letters (or recommendation letters,
+or professor emails) into 8-12 concise, actionable markdown bullets. Keep concrete rules, structures and examples; drop
+marketing and fluff. If the source is not about this, say so in one line.
+
+SOURCE:
+{text[:20000]}"""
+    body = call(ai.generate, prompt, None, False, 0.2)
+    with db.conn() as c:
+        c.execute("INSERT INTO playbook(topic,body,sources) VALUES(?,?,?) ON CONFLICT(topic) DO UPDATE SET "
+                  "body=excluded.body, sources=excluded.sources, created=CURRENT_TIMESTAMP",
+                  (f"Your source: {title or 'pasted text'}"[:90], body, json.dumps(sources)))
+    return {"ok": True}
+
+
+@router.delete("/playbook/{pid}")
+def delete_playbook(pid: int):
+    with db.conn() as c:
+        c.execute("DELETE FROM playbook WHERE id=?", (pid,))
+    return {"ok": True}
 
 
 @router.get("/playbook")
@@ -123,12 +167,13 @@ def template_body(tid):
 class ImportIn(BaseModel):
     text: str = ""
     source: str = "linkedin_profile"
+    overwrite: bool = False  # replace fields that already have a value with what the source says
 
 
 @router.post("/profile/import")
 def import_profile(b: ImportIn):
     """Build/extend the profile from pasted or extension-sent profile text, plus any uploaded CVs.
-    Only fills fields that are still empty; never overwrites what the user wrote."""
+    Fills empty fields; fields you already wrote are kept unless overwrite is set."""
     text = b.text
     with db.conn() as c:
         cvs = c.execute("SELECT text FROM documents WHERE kind='cv'").fetchall()
@@ -137,15 +182,20 @@ def import_profile(b: ImportIn):
         raise HTTPException(400, "No profile text. Upload a CV or send your LinkedIn profile from the extension.")
     extracted = call(agents.profile_from_text, text, None)
     current = m().get_profile()
-    filled = []
+    filled, kept = [], []
     for k, v in extracted.items():
         if isinstance(v, list):
             v = "; ".join(str(x) for x in v)
-        if v and not str(current.get(k, "")).strip():
+        if not v:
+            continue
+        if b.overwrite or not str(current.get(k, "")).strip():
+            if str(current.get(k, "")) != str(v):
+                filled.append(k)
             current[k] = str(v)
-            filled.append(k)
+        else:
+            kept.append(k)
     m().put_profile(m().Profile(data=current))
-    return {"filled": filled}
+    return {"filled": filled, "kept": kept, "found": len(filled) + len(kept)}
 
 
 # ---------- discovery sweep ----------

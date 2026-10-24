@@ -297,3 +297,67 @@ def test_application_type_and_fee_are_cleaned():
     assert main.norm_mode("online | offline") == "both" and main.norm_mode("Online portal") == "online" and main.norm_mode("by post") == "offline"
     assert main.norm_mode("") == "" and main.norm_mode("n/a") == ""
     assert main.norm_fee("''") == "" and main.norm_fee("Not stated") == "" and main.norm_fee("no fee") == "Free" and main.norm_fee("EUR 50") == "EUR 50"
+
+
+# ---------- recommendation letters ----------
+def test_recommender_is_saved_and_added_to_referees(client):
+    r = client.post("/api/recommenders", json={"name": "Prof. Jane Smith", "email": "jane@uni.edu", "title": "Professor",
+                                               "university": "Cairo University", "course": "Machine Learning"}).json()
+    assert r["name"] == "Prof. Jane Smith" and not r["has_draft"] and not r["has_signed"]
+    assert "jane@uni.edu" in client.get("/api/profile").json()["referees"]
+    client.put(f"/api/recommenders/{r['id']}", json={"name": "Prof. Jane Smith", "email": "jane@uni.edu"})
+    assert client.get("/api/profile").json()["referees"].count("jane@uni.edu") == 1  # not duplicated on edit
+    assert client.post("/api/recommenders", json={"name": " "}).status_code == 400
+
+
+def test_recommendation_draft_is_saved_and_downloadable(client):
+    rid = client.post("/api/recommenders", json={"name": "Dr. Omar"}).json()["id"]
+    assert client.get(f"/api/recommenders/{rid}/draft.docx").status_code == 400
+    client.put(f"/api/recommenders/{rid}/draft", json={"draft": "To the Admissions Committee,\n\nI recommend her.\n\nDr. Omar"})
+    assert client.get("/api/recommenders").json()[0]["has_draft"]
+    res = client.get(f"/api/recommenders/{rid}/draft.docx")
+    assert res.status_code == 200 and res.content[:2] == b"PK"  # a real .docx
+
+
+def test_signed_letter_upload_download_and_coverage(client):
+    rid = client.post("/api/recommenders", json={"name": "Dr. Omar"}).json()["id"]
+    bad = client.post(f"/api/recommenders/{rid}/signed", files={"file": ("x.exe", b"MZ", "application/octet-stream")})
+    assert bad.status_code == 400
+    ok = client.post(f"/api/recommenders/{rid}/signed", files={"file": ("signed.png", b"\x89PNG data", "image/png")})
+    assert ok.status_code == 200
+    assert client.get(f"/api/recommenders/{rid}/signed").content == b"\x89PNG data"
+    assert any(d["kind"] == "recommendation" for d in client.get("/api/documents").json())
+    client.delete(f"/api/recommenders/{rid}/signed")
+    assert client.get(f"/api/recommenders/{rid}/signed").status_code == 404
+    assert not any(d["kind"] == "recommendation" for d in client.get("/api/documents").json())
+
+
+def test_scholarship_that_needs_a_letter_gets_a_request_email(client):
+    import main
+    sid = main.save_scholarship({"name": "Demo Master Award", "provider": "Demo Foundation", "url": "https://demo.example/award",
+                                 "deadline": day(30), "required_docs": ["CV", "Two letters of recommendation"]}, "manual")
+    rid = client.post("/api/recommenders", json={"name": "Prof. Jane Smith", "email": "jane@uni.edu"}).json()["id"]
+    d = client.get(f"/api/scholarships/{sid}/recommendations").json()
+    assert d["needed"] and d["recommenders"][0]["id"] == rid
+    assert "Demo Master Award" in d["recommenders"][0]["subject"] and day(30) in d["recommenders"][0]["body"]
+    assert d["recommenders"][0]["body"].startswith("Dear Prof. Jane Smith")
+    assert client.post(f"/api/scholarships/{sid}/recommendations/email",
+                       json={"recommender_id": rid, "action": "send", "confirm": False}).status_code == 400  # needs confirm
+
+
+def test_scholarship_without_a_letter_requirement_shows_no_panel(client):
+    import main
+    sid = main.save_scholarship({"name": "Plain Award", "required_docs": ["CV", "Transcript"]}, "manual")
+    assert client.get(f"/api/scholarships/{sid}/recommendations").json()["needed"] is False
+
+
+def test_profile_import_reports_kept_and_can_overwrite(client, monkeypatch):
+    import agents
+    monkeypatch.setattr(agents, "profile_from_text", lambda text, keys: {"full_name": "New Name", "skills": "Python"})
+    client.put("/api/profile", json={"data": {"full_name": "Old Name"}})
+    body = {"text": "x" * 80}
+    r = client.post("/api/profile/import", json=body).json()
+    assert r["filled"] == ["skills"] and r["kept"] == ["full_name"]
+    assert client.get("/api/profile").json()["full_name"] == "Old Name"
+    client.post("/api/profile/import", json={**body, "overwrite": True})
+    assert client.get("/api/profile").json()["full_name"] == "New Name"

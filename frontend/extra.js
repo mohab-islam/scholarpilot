@@ -14,14 +14,18 @@ function countdown(days) {
 VIEWS.lab = async function () {
   const [pb, tpl] = await Promise.all([api('/playbook'), api('/templates')]);
   $('#main').innerHTML = `<div class="card"><h2>Research the perfect letter formula</h2>
-    <p class="mute">Five search agents run in parallel across the web: letter structures, what selection committees look for, authentic voice, cold-email advice, and specifics for your field and target countries. The writer then applies this research.</p>
+    <p class="mute">Nine search agents run across the web: letter structures, annotated real examples, what selection committees look for, mistakes that sink letters, storytelling, linking to the programme, authentic voice, cold-email advice, and specifics for your field and target countries. The writer then applies this research, and you can add your own sources below.</p>
     <button class="btn" id="rp">${pb.length ? 'Refresh' : 'Run'} research agents</button></div>
-    ${pb.map(p => `<div class="card"><h3>${esc(p.topic)}</h3><div style="white-space:pre-wrap">${esc(p.body)}</div>
+    <div class="card"><h2>Add your own source</h2><p class="mute">Paste a link to an article or guide you trust (or paste its text). It is distilled into rules the writer will apply.</p>
+      <input id="sl" placeholder="https://…"><br><br><textarea id="st" placeholder="…or paste text here" style="min-height:80px"></textarea><br><br><button class="btn" id="sa">Add source</button></div>
+    ${pb.map(p => `<div class="card"><div class="top"><h3>${esc(p.topic)}</h3><button class="btn sm ghost" data-pbd="${p.id}">remove</button></div><div style="white-space:pre-wrap">${esc(p.body)}</div>
       <p class="mute">Sources: ${p.sources.slice(0, 5).map(x => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title || 'link')}</a>`).join(' · ')}</p></div>`).join('')}
     <div class="card"><h2>Templates</h2><p class="mute">Generated from the research and your profile. Pick one in the Writer.</p>
     <button class="btn" id="gt">Generate templates</button>
     ${tpl.map(t => `<div class="card"><div class="top"><h3>${esc(t.name)}</h3><button class="btn sm ghost" data-td="${t.id}">delete</button></div><p class="mute">${esc(t.description)}</p><div style="white-space:pre-wrap">${esc(t.body)}</div></div>`).join('')}</div>`;
   $('#rp').onclick = e => busy(e.target, 'Agents searching (1-3 min)…', async () => { const r = await api('/playbook/research', {method: 'POST'}); toast(`${r.topics} topics researched`); render(); });
+  $('#sa').onclick = e => busy(e.target, 'Reading source…', async () => { await api('/playbook/source', {method: 'POST', body: {url: $('#sl').value, text: $('#st').value}}); toast('Source added'); render(); });
+  document.querySelectorAll('[data-pbd]').forEach(b => b.onclick = async () => { await api('/playbook/' + b.dataset.pbd, {method: 'DELETE'}); render(); });
   $('#gt').onclick = e => busy(e.target, 'Writing templates…', async () => { await api('/templates/generate', {method: 'POST'}); render(); });
   document.querySelectorAll('[data-td]').forEach(b => b.onclick = async () => { await api('/templates/' + b.dataset.td, {method: 'DELETE'}); render(); });
 };

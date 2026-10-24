@@ -46,11 +46,22 @@ PLAYBOOK_AGENTS = {
                                   "yourself rather than a template.",
     "Professor outreach": "Find advice from professors and admissions staff on cold emails to prospective supervisors for "
                           "master's/PhD positions: structure, length, what makes them reply, what gets ignored, follow-up timing.",
+    "Annotated strong examples": "Find real, publicly available examples of successful scholarship motivation letters / "
+                                 "statements of purpose for master's programmes (university writing centres, scholarship "
+                                 "alumni pages, admissions blogs) and explain concretely what each does well, paragraph by paragraph.",
+    "Mistakes that sink letters": "Find the most common mistakes, red flags and reasons motivation letters are rejected or "
+                                  "scored low (generic praise, repeating the CV, no link to the programme, weak ending, AI-sounding "
+                                  "text), with before/after fixes.",
+    "Storytelling & hooks": "Find expert guidance on turning real experiences (projects, research, hardship, turning points) "
+                            "into a compelling narrative for a scholarship letter: opening hooks, the 'so what' of an "
+                            "achievement, linking past to future goals and to the funder's mission.",
+    "Linking to the programme and funder": "Find advice on researching a specific programme/funder and weaving its curriculum, "
+                                           "labs, values and mission into a motivation letter without flattery or copy-paste.",
     "Field and country specifics": None,  # filled with profile at run time
 }
 
 
-def run_playbook(profile_summary):
+def run_playbook(profile_summary):  # nine agents, run five at a time
     jobs = []
     for name, brief in PLAYBOOK_AGENTS.items():
         if brief is None:

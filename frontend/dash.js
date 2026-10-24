@@ -1,7 +1,7 @@
 // Sidebar navigation, dashboard (big countdown, pinned status, missing papers), workspace to-dos, Gmail inbox.
 Object.keys(TABS).forEach(k => delete TABS[k]);
-Object.assign(TABS, {plan: 'Dashboard', sch: 'Scholarships', disc: 'Discover', li: 'LinkedIn', app: 'Application', mail: 'Inbox & Gmail', me: 'My profile', lab: 'Letter lab', write: 'Writer'});
-const GROUPS = [['Overview', ['plan']], ['Find', ['disc', 'sch', 'li']], ['Apply', ['app', 'mail']], ['Build', ['me', 'lab', 'write']]];
+Object.assign(TABS, {plan: 'Dashboard', sch: 'Scholarships', disc: 'Discover', li: 'LinkedIn', app: 'Application', mail: 'Inbox & Gmail', me: 'My profile', rec: 'Recommendations', lab: 'Letter lab', write: 'Writer'});
+const GROUPS = [['Overview', ['plan']], ['Find', ['disc', 'sch', 'li']], ['Apply', ['app', 'mail']], ['Build', ['me', 'rec', 'lab', 'write']]];
 const P = {
   plan: '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
   disc: '<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/>',
@@ -11,6 +11,7 @@ const P = {
   mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
   me: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>',
   lab: '<path d="M9 3h6M10 3v6L4.5 19a1.5 1.5 0 0 0 1.3 2h12.4a1.5 1.5 0 0 0 1.3-2L14 9V3"/>',
+  rec: '<path d="M4 4h12l4 4v12H4z"/><path d="M15 4v5h5"/><path d="M8 14c1-2 2-2 3 0s2 2 3 0"/>',
   write: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
 };
 const svg = k => `<svg class="i" viewBox="0 0 24 24">${P[k]}</svg>`;

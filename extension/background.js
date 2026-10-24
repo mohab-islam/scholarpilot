@@ -5,6 +5,14 @@ try { importScripts("config.local.js"); } catch (e) { /* optional local defaults
 const LOCAL = (typeof self !== "undefined" && self.SP_CONFIG) || {};
 
 const setStatus = s => chrome.storage.local.set({ status: { ...s, t: Date.now() } });
+// A killed service worker can leave an "active" status behind; clear it whenever the worker starts with no job running.
+const resetStale = () => chrome.storage.local.get("status", v => {
+  const s = v.status;
+  if (s && (s.phase === "scrolling" || s.phase === "sending") && !running) setStatus({ phase: "idle", text: "", pct: 0 });
+});
+resetStale();
+chrome.runtime.onStartup.addListener(resetStale);
+chrome.runtime.onInstalled.addListener(resetStale);
 
 // ---- injected into the LinkedIn page -------------------------------------------------
 function stepScroll() {
@@ -43,22 +51,25 @@ async function serverConfig() {
   return { base, headers: { "Content-Type": "application/json", ...(tok ? { "X-API-Key": tok } : {}) } };
 }
 
-async function importProfile(tabId) {
+async function importProfile(tabId, overwrite) {
   try {
     await setStatus({ phase: "sending", text: "Reading this profile…", pct: 30 });
+    if (!/\/in\//.test((await chrome.tabs.get(tabId)).url || "")) throw new Error("open your LinkedIn profile page first");
     const { base, headers } = await serverConfig();
     const [{ result }] = await chrome.scripting.executeScript({ target: { tabId }, func: () => document.body.innerText.slice(0, 40000) });
-    const r = await fetch(base + "/api/profile/import", { method: "POST", headers, body: JSON.stringify({ text: result }) });
+    const r = await fetch(base + "/api/profile/import", { method: "POST", headers, body: JSON.stringify({ text: result, overwrite: !!overwrite }) });
     const j = await r.json().catch(() => ({}));
+    const done = (j.filled || []).length ? `Profile updated: ${j.filled.join(", ")}.` : `Profile read (${j.found || 0} fields found); nothing new to add.`;
     await setStatus({ phase: r.ok ? "done" : "error", pct: 100,
-      text: r.ok ? "Profile updated. Fields filled: " + ((j.filled || []).join(", ") || "none (nothing new)") : "Server said: " + (j.detail || r.status) });
+      text: r.ok ? done + ((j.kept || []).length && !overwrite ? `
+${j.kept.length} fields already in your profile were kept.` : "") : "Server said: " + (j.detail || r.status) });
   } catch (e) { await setStatus({ phase: "error", text: "Error: " + e.message, pct: 100 }); }
 }
 
 function activityId(p) { const m = /(?:urn:li:activity:|activity-)(\d{8,})/.exec(p.url || ""); return m ? m[1] : ""; }
 
 async function run(tabId) {
-  if (running) return;
+  if (running) { await setStatus({ phase: "scrolling", text: "Already running…", pct: 5 }); return; }
   running = true; stopFlag = false;
   try {
     const { base, headers } = await serverConfig();
@@ -112,6 +123,6 @@ async function run(tabId) {
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   const tabId = msg.tabId ?? (sender.tab && sender.tab.id);
   if (msg.type === "start") { run(tabId); reply({ ok: true }); }
-  if (msg.type === "profile") { importProfile(tabId); reply({ ok: true }); }
+  if (msg.type === "profile") { importProfile(tabId, msg.overwrite); reply({ ok: true }); }
   if (msg.type === "stop") { stopFlag = true; reply({ ok: true }); }
 });
