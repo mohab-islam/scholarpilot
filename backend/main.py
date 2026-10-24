@@ -892,6 +892,7 @@ class Post(BaseModel):
 
 class IngestIn(BaseModel):
     posts: list[Post]
+    force: bool = False  # analyse posts again even if they were seen before
 
 
 URL_RE = re.compile(r"https?://[^\s)\]>\"']+")
@@ -961,7 +962,7 @@ def linkedin_ingest(body: IngestIn):
     with db.conn() as c:
         for p in body.posts:
             keys = post_keys(p)
-            if any(c.execute("SELECT 1 FROM seen_posts WHERE key=?", (k,)).fetchone() for k in keys):
+            if not body.force and any(c.execute("SELECT 1 FROM seen_posts WHERE key=?", (k,)).fetchone() for k in keys):
                 st["already_seen"] += 1
                 continue
             if any(k in batch_keys for k in keys):
@@ -976,7 +977,7 @@ def linkedin_ingest(body: IngestIn):
                 st["queued"] += 1
                 verdict = "queued"
             for k in keys:
-                c.execute("INSERT OR IGNORE INTO seen_posts(key,verdict) VALUES(?,?)", (k, verdict))
+                c.execute("INSERT INTO seen_posts(key,verdict) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET verdict=excluded.verdict", (k, verdict))
     if st["queued"]:
         jobs.kick_ingest()
     return st

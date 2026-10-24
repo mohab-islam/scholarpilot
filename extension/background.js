@@ -76,7 +76,7 @@ async function run(tabId) {
 
     // 1) scroll until nothing new loads
     let same = 0, last = "", iter = 0;
-    const stored = await chrome.storage.local.get("limit");
+    const stored = await chrome.storage.local.get(["limit", "force"]);
     const LIMIT = Math.max(5, Math.min(200, Number(stored.limit) || DEFAULT_LIMIT));
     while (!stopFlag && same < 4 && iter < 250) {
       const [{ result }] = await chrome.scripting.executeScript({ target: { tabId }, func: stepScroll });
@@ -104,17 +104,22 @@ async function run(tabId) {
     const BATCH = 40;
     for (let i = 0; i < posts.length; i += BATCH) {
       await setStatus({ phase: "sending", text: `Analysing posts ${i + 1}–${Math.min(i + BATCH, posts.length)} of ${posts.length}…`, pct: 40 + 60 * i / posts.length });
-      const r = await fetch(base + "/api/linkedin/ingest", { method: "POST", headers, body: JSON.stringify({ posts: posts.slice(i, i + BATCH) }) });
+      const r = await fetch(base + "/api/linkedin/ingest", { method: "POST", headers, body: JSON.stringify({ posts: posts.slice(i, i + BATCH), force: !!stored.force }) });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { await setStatus({ phase: "error", text: "Server said: " + (j.detail || r.status), pct: 100 }); return; }
       for (const k of Object.keys(j)) tot[k] = (tot[k] || 0) + j[k];
     }
     const dup = removed + tot.duplicates;
+    const nothingNew = !tot.queued;
     await setStatus({ phase: "done", pct: 100, text:
-      `Done. ${posts.length} unique posts (${dup} duplicates removed).\n` +
-      `• ${tot.queued || 0} queued for analysis on your server (they appear in Scholarships within minutes)\n` +
-      `• ${tot.not_scholarship} skipped as not scholarship-related\n` +
-      `• ${tot.already_seen} already processed in an earlier run` });
+      (nothingNew ? `Nothing new to analyse: ${posts.length} saved posts read, ` +
+        (tot.already_seen ? `${tot.already_seen} were already analysed in earlier runs` : "") +
+        (tot.not_scholarship ? `${tot.already_seen ? ", " : ""}${tot.not_scholarship} are not about scholarships` : "") + "." + String.fromCharCode(10) +
+        (tot.already_seen ? "Tick “Re-check posts analysed before” in the popup to run them again." : "")
+       : `Done. ${posts.length} saved posts read (${dup} duplicates removed).
+• ${tot.queued} sent for analysis on your server; they appear in Scholarships within minutes
+• ${tot.not_scholarship} skipped as not scholarship-related
+• ${tot.already_seen} already analysed earlier`) });
   } catch (e) {
     await setStatus({ phase: "error", text: "Error: " + e.message, pct: 100 });
   } finally { running = false; }

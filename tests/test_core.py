@@ -361,3 +361,13 @@ def test_profile_import_reports_kept_and_can_overwrite(client, monkeypatch):
     assert client.get("/api/profile").json()["full_name"] == "Old Name"
     client.post("/api/profile/import", json={**body, "overwrite": True})
     assert client.get("/api/profile").json()["full_name"] == "New Name"
+
+
+def test_ingest_force_requeues_posts_seen_before(client):
+    client.put("/api/profile", json={"data": PROFILE})
+    post = {"text": "DAAD scholarship for master students, deadline 2030-01-01 apply at https://daad.de", "links": []}
+    first = client.post("/api/linkedin/ingest", json={"posts": [post]}).json()
+    again = client.post("/api/linkedin/ingest", json={"posts": [post]}).json()
+    forced = client.post("/api/linkedin/ingest", json={"posts": [post], "force": True}).json()
+    assert first["queued"] == 1 and again["already_seen"] == 1 and again["queued"] == 0
+    assert forced["queued"] == 1 and forced["already_seen"] == 0

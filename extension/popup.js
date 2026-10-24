@@ -12,7 +12,8 @@ async function ping() {
   } catch (e) { $("conn").textContent = "Server not reachable"; }
 }
 
-chrome.storage.local.get(["srv", "tok", "limit"], v => {
+chrome.storage.local.get(["srv", "tok", "limit", "force"], v => {
+  $("force").checked = !!v.force;
   if (v.srv) BASE = v.srv.replace(/\/$/, "");
   TOKEN = v.tok || LOCAL.tok || "";
   $("srv").value = v.srv || ""; $("tok").value = v.tok || ""; $("lim").value = v.limit || "";
@@ -42,6 +43,7 @@ function paint(s) {
 }
 chrome.storage.local.get("status", v => paint(v.status));
 chrome.storage.onChanged.addListener(c => { if (c.status) paint(c.status.newValue); });
+$("force").onchange = () => chrome.storage.local.set({ force: $("force").checked });
 $("reset").onclick = () => chrome.storage.local.set({ status: { phase: "idle", text: "", pct: 0, t: Date.now() } });
 
 $("go").onclick = async () => {

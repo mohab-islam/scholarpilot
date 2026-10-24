@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS mail_events (
 """
 
 MIGRATIONS = {
+    "ingest_queue": [("tries", "INTEGER DEFAULT 0"), ("error", "TEXT DEFAULT ''")],
     "scholarships": [("pinned", "INTEGER DEFAULT 0"), ("steps_done", "TEXT DEFAULT '[]'"),
                      ("research", "TEXT DEFAULT ''"), ("fit", "TEXT DEFAULT ''"), ("fit_reason", "TEXT DEFAULT ''"), ("eligibility_check", "TEXT DEFAULT ''"), ("verdict", "TEXT DEFAULT ''"),
                      ("verdict_reason", "TEXT DEFAULT ''"), ("verified_at", "TEXT DEFAULT ''"),

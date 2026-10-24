@@ -45,16 +45,23 @@ def queue_counts():
         return {r[0]: r[1] for r in c.execute("SELECT status, count(*) FROM ingest_queue GROUP BY status")}
 
 
+INGEST_TRIES = 3
+
+
 def _process(row):
     import main
+    err = ""
     try:
         main.process_post(main.Post(**json.loads(row["post"])))
-        status = "done"
     except Exception as e:
-        status = "error"
-        STATE["error"] = str(e)[:200]
+        err = str(e)[:300]
+        STATE["error"] = err[:200]
+    tries = (row.get("tries") or 0) + (1 if err else 0)
+    if err and tries < INGEST_TRIES:
+        time.sleep(6 * tries)  # quota or network hiccups usually clear within seconds
+    status = "done" if not err else ("pending" if tries < INGEST_TRIES else "error")
     with db.conn() as c:
-        c.execute("UPDATE ingest_queue SET status=? WHERE id=?", (status, row["id"]))
+        c.execute("UPDATE ingest_queue SET status=?, tries=?, error=? WHERE id=?", (status, tries, err, row["id"]))
 
 
 def drain_ingest():
@@ -78,7 +85,7 @@ def drain_ingest():
 
 def _ingest_loop():
     with db.conn() as c:  # anything interrupted by a restart goes back in line
-        c.execute("UPDATE ingest_queue SET status='pending' WHERE status='processing'")
+        c.execute("UPDATE ingest_queue SET status='pending' WHERE status='processing' OR (status='error' AND tries<?)", (INGEST_TRIES,))
     kick_ingest()
     while True:
         _ingest_wake.wait(timeout=60)
